@@ -474,6 +474,68 @@ run_minimal_claude_session() {
   timeout "$timeout_sec" $CLAUDE_CLI -p "say ok" --dangerously-skip-permissions --no-session-persistence 2>&1 || true
 }
 
+run_real_claude_session() {
+  # Runs a REAL interactive Claude session in tmux that fires SessionStart hooks.
+  # SessionStart hooks ONLY fire in interactive TUI mode (not -p/print mode,
+  # not piped stdin). tmux provides a real PTY for the TUI.
+  # Requires: tmux installed on the system.
+  local wait_sec="${1:-12}"
+  local session_name="statusline-test-$$"
+
+  # Kill any leftover session
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+
+  # Start Claude in a detached tmux session (real PTY)
+  tmux new-session -d -s "$session_name" "$CLAUDE_CLI --dangerously-skip-permissions" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    info "tmux failed to start session"
+    return 1
+  fi
+
+  # Wait for Claude to initialize and fire SessionStart hooks
+  sleep "$wait_sec"
+
+  # Kill the session (we don't need to interact, just let hooks fire)
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+}
+
+install_plugin_real() {
+  # Does a REAL plugin install using Claude CLI subcommands.
+  # This creates proper entries in installed_plugins.json (required for hook discovery).
+  # Requires: marketplace repo accessible from remote machine.
+
+  # Step 1: Add marketplace (idempotent — skips if already added)
+  info "Adding marketplace via CLI..."
+  $CLAUDE_CLI plugin marketplace add "$MARKETPLACE_REPO" 2>&1 || true
+
+  # Step 2: Install plugin
+  info "Installing plugin via CLI..."
+  $CLAUDE_CLI plugin install "$PLUGIN_NAME" 2>&1 || true
+}
+
+uninstall_plugin_real() {
+  # Does a REAL plugin uninstall using Claude CLI subcommands.
+  $CLAUDE_CLI plugin uninstall "$PLUGIN_NAME" 2>&1 || true
+}
+
+reset_clean_state_real() {
+  # Full cleanup including real plugin uninstall and marketplace removal.
+  # Use this for T21+ tests that need a truly clean state.
+  info "Resetting to clean state (real)..."
+
+  # Uninstall plugin if installed
+  $CLAUDE_CLI plugin uninstall "$PLUGIN_NAME" 2>/dev/null || true
+
+  # Remove marketplace
+  $CLAUDE_CLI plugin marketplace remove skills-ai 2>/dev/null || true
+
+  # Reset settings.json to empty (remove all test artifacts)
+  mkdir -p "$(dirname "$SETTINGS_FILE")"
+  echo '{}' > "$SETTINGS_FILE"
+
+  info "Clean state achieved (real)"
+}
+
 install_marker_run_sh() {
   # Replaces run.sh with a marker script that writes a file when invoked.
   # Backs up the original run.sh first.
@@ -540,6 +602,13 @@ preflight() {
     pass "Node.js available at $node_bin"
   else
     fail "Node.js not found"
+    ok=false
+  fi
+
+  if command -v tmux &>/dev/null; then
+    pass "tmux available (required for real session tests)"
+  else
+    fail "tmux not found (required for T21 real session test)"
     ok=false
   fi
 
@@ -1904,6 +1973,99 @@ test_T20_full_one_restart_lifecycle() {
   fi
 }
 
+test_T21_real_restart_count() {
+  test_header "T21: Real Restart Count (How Many Restarts Before Statusline?)" \
+    "Real install → real CC sessions via tmux → check settings.json between each → count restarts"
+
+  # ── Step 1: Full real cleanup and fresh install ──
+  reset_clean_state_real
+
+  info "Installing plugin via real CLI commands..."
+  install_plugin_real
+
+  # Verify plugin was installed
+  if [ ! -d "$PLUGIN_CACHE" ]; then
+    fail "Plugin cache not created after real install"
+    return
+  fi
+  pass "Plugin installed via real CLI"
+
+  # Verify: NO statusLine in settings.json (just enabledPlugins)
+  if verify_settings_clean; then
+    pass "After install: no statusLine in settings.json"
+  else
+    fail "After install: statusLine unexpectedly present"
+    return
+  fi
+  info "settings.json after install: $(cat "$SETTINGS_FILE")"
+
+  # ── Step 2: First real Claude session (tmux, fires SessionStart hook) ──
+  info "Starting 1st real Claude session via tmux (waiting 12s for hooks)..."
+  run_real_claude_session 12
+
+  # Check: Did SessionStart hook write statusLine?
+  local has_statusline_after_session1="no"
+  if verify_settings_has_statusline; then
+    has_statusline_after_session1="yes"
+    info "After session 1: statusLine IS in settings.json (hook fired)"
+  else
+    info "After session 1: statusLine NOT in settings.json (hook did not fire)"
+  fi
+
+  # ── Step 3: Second real Claude session ──
+  info "Starting 2nd real Claude session via tmux (waiting 12s)..."
+  run_real_claude_session 12
+
+  local has_statusline_after_session2="no"
+  if verify_settings_has_statusline; then
+    has_statusline_after_session2="yes"
+    info "After session 2: statusLine IS in settings.json"
+  else
+    info "After session 2: statusLine NOT in settings.json"
+  fi
+
+  # ── Step 4: Determine restart count ──
+  info "=== Restart Count Analysis ==="
+
+  if [ "$has_statusline_after_session1" = "yes" ]; then
+    # Hook fired during session 1 → statusLine was written.
+    # But Claude reads settings.json BEFORE SessionStart fires.
+    # So session 1 started WITHOUT statusLine → no statusline visible in session 1.
+    # Session 2 starts WITH statusLine already present → statusline visible.
+    pass "SessionStart hook wrote statusLine during 1st session after install"
+    info "Timeline: install → session1 (no bar, hook writes config) → session2 (bar shows)"
+    info "RESULT: 1 restart needed (statusline appears on 2nd session)"
+    pass "Restart count: 1 (2 total sessions to see statusline)"
+
+    # Verify the written config is correct
+    local cmd
+    cmd=$(get_statusline_command_from_settings)
+    if [ -n "$cmd" ]; then
+      pass "statusLine command is valid: $cmd"
+    else
+      fail "statusLine command is empty"
+    fi
+
+  elif [ "$has_statusline_after_session2" = "yes" ]; then
+    # Hook didn't fire in session 1, but did in session 2
+    pass "SessionStart hook wrote statusLine during 2nd session (not 1st)"
+    info "Timeline: install → session1 (no hook fire) → session2 (hook writes config) → session3 (bar shows)"
+    info "RESULT: 2 restarts needed (statusline appears on 3rd session)"
+    pass "Restart count: 2 (3 total sessions to see statusline)"
+
+  else
+    # Neither session wrote statusLine
+    fail "SessionStart hook never fired in either real session"
+    info "settings.json: $(cat "$SETTINGS_FILE")"
+    info "Check: is plugin in installed_plugins.json?"
+    cat "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null || info "(file not found)"
+  fi
+
+  # ── Cleanup ──
+  info "Cleaning up real install..."
+  reset_clean_state_real
+}
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -1938,6 +2100,9 @@ test_T17_empty_settings
 test_T18_existing_statusline
 test_T19_concurrent_modification
 test_T20_full_one_restart_lifecycle
+
+# ── Real Restart Count Test ───────────────────────────────────────────────
+test_T21_real_restart_count
 
 # ── Final Cleanup ──────────────────────────────────────────────────────────
 
