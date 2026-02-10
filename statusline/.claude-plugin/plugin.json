@@ -1,0 +1,10 @@
+{
+  "name": "statusline",
+  "version": "1.0.0",
+  "description": "Status line showing model, git branch/status, active task, directory, and context window usage",
+  "author": {
+    "name": "thariman"
+  },
+  "license": "MIT",
+  "keywords": ["statusline", "git", "context-window", "productivity"]
+}
