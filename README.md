@@ -36,15 +36,20 @@ claude plugin marketplace add https://github.com/thariman/Skills-AI
 claude plugin install statusline
 ```
 
-The setup hook automatically configures your `~/.claude/settings.json` to use the statusline.
+**Start Claude Code twice:**
 
-**Verify it's working:**
+The first session triggers the setup hook which configures your `~/.claude/settings.json`. The statusline appears from the **second session** onwards.
+
+```bash
+claude   # first run — configures settings.json, then exit
+claude   # second run — statusline appears
+```
+
+**Verify it's installed:**
 
 ```bash
 claude plugin list
 ```
-
-Then start a new Claude Code session — the status line appears at the bottom of your terminal.
 
 ## Uninstalling
 

@@ -1,9 +1,8 @@
 {
-  "description": "Status line setup hook",
+  "description": "Status line setup hook - configures statusLine in settings.json on session start",
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
