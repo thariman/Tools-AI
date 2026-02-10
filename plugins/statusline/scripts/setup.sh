@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Setup script for statusline plugin
 # Configures settings.json to use the plugin's statusline.js
+# Runs on SessionStart — skips if already configured
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -10,6 +11,11 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 # Ensure settings.json exists
 if [ ! -f "$SETTINGS_FILE" ]; then
   echo '{}' > "$SETTINGS_FILE"
+fi
+
+# Skip if already configured with the correct path
+if grep -q "$STATUSLINE_JS" "$SETTINGS_FILE" 2>/dev/null; then
+  exit 0
 fi
 
 # Use node to safely update settings.json with the statusLine config
