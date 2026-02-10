@@ -2,6 +2,7 @@
 # Setup script for statusline plugin
 # Configures settings.json to use the plugin's statusline.js
 # Runs on SessionStart — skips if already configured
+# No external dependencies (no node/python/jq required)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -18,18 +19,18 @@ if grep -q "$STATUSLINE_JS" "$SETTINGS_FILE" 2>/dev/null; then
   exit 0
 fi
 
-# Use node to safely update settings.json with the statusLine config
-node -e "
-const fs = require('fs');
-const settingsFile = process.argv[1];
-const statuslineJs = process.argv[2];
+# Build the statusLine JSON value
+SL_VALUE="\"statusLine\": { \"type\": \"command\", \"command\": \"node \\\"${STATUSLINE_JS}\\\"\" }"
 
-const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-settings.statusLine = {
-  type: 'command',
-  command: 'node \"' + statuslineJs + '\"'
-};
-fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
-" "$SETTINGS_FILE" "$STATUSLINE_JS"
+# Insert into settings.json using pure bash string manipulation
+CONTENTS="$(cat "$SETTINGS_FILE")"
 
+if echo "$CONTENTS" | grep -q '"'; then
+  # Has existing keys — strip trailing whitespace/newlines and closing brace, append our block
+  TRIMMED="${CONTENTS%\}*}"
+  printf '%s,\n  %s\n}\n' "$TRIMMED" "$SL_VALUE" > "$SETTINGS_FILE"
+else
+  # Empty object
+  printf '{\n  %s\n}\n' "$SL_VALUE" > "$SETTINGS_FILE"
+fi
 echo "Statusline configured: $STATUSLINE_JS"
