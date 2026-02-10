@@ -4,6 +4,21 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"
+SETTINGS_FILE="$HOME/.claude/settings.json"
+
+# Auto-cleanup: if plugin was uninstalled, remove statusLine from settings.json
+if [ -f "$SETTINGS_FILE" ] && ! grep -q '"statusline@skills-ai"' "$SETTINGS_FILE" 2>/dev/null; then
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+s.pop('statusLine', None)
+with open(sys.argv[1], 'w') as f:
+    json.dump(s, f, indent=2)
+    f.write('\n')
+" "$SETTINGS_FILE" 2>/dev/null
+  exit 0
+fi
 
 # Find node: try PATH first, then load nvm/fnm if needed
 find_node() {
