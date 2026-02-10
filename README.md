@@ -43,12 +43,11 @@ bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/setup.sh
 
 ## Uninstalling
 
-Run the cleanup script **before** uninstalling (uninstall deletes the cached scripts):
-
 ```bash
-bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
 claude plugin uninstall statusline
 ```
+
+The statusline config is automatically removed from `settings.json` on the next session.
 
 To remove the marketplace source entirely:
 
