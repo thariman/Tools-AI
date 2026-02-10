@@ -24,6 +24,8 @@ SETTINGS_FILE="$HOME/.claude/settings.json"
 SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
 PLUGIN_CACHE="$HOME/.claude/plugins/cache/skills-ai"
 MARKETPLACE_REPO="thariman/Skills-AI"
+MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/skills-ai"
+KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
 PLUGIN_NAME="statusline@skills-ai"
 # Plugin cache structure: $PLUGIN_CACHE/statusline/<version>/
 # Use a glob to find the version directory dynamically
@@ -103,6 +105,30 @@ assert_file_not_exists() {
     return 0
   else
     fail "$msg (file still exists: $file)"
+    return 1
+  fi
+}
+
+assert_dir_exists() {
+  local dir="$1"
+  local msg="${2:-Directory exists: $dir}"
+  if [ -d "$dir" ]; then
+    pass "$msg"
+    return 0
+  else
+    fail "$msg (directory not found: $dir)"
+    return 1
+  fi
+}
+
+assert_dir_not_exists() {
+  local dir="$1"
+  local msg="${2:-Directory does not exist: $dir}"
+  if [ ! -d "$dir" ]; then
+    pass "$msg"
+    return 0
+  else
+    fail "$msg (directory still exists: $dir)"
     return 1
   fi
 }
@@ -224,24 +250,31 @@ with open(sys.argv[1], 'w') as f:
   # Remove plugin cache
   rm -rf "$PLUGIN_CACHE"
 
-  # Remove marketplace entry if exists
-  if [ -f "$HOME/.claude/marketplace/repos.json" ]; then
+  # Remove marketplace entry from known_marketplaces.json
+  if [ -f "$KNOWN_MARKETPLACES" ]; then
     /usr/bin/python3 -c "
-import json, sys
+import json, sys, tempfile, os
 f = sys.argv[1]
 with open(f) as fh:
     data = json.load(fh)
-if isinstance(data, list):
-    data = [r for r in data if 'Skills-AI' not in str(r) and 'skills-ai' not in str(r)]
-elif isinstance(data, dict):
+if isinstance(data, dict):
     for k in list(data.keys()):
-        if 'Skills-AI' in k or 'skills-ai' in k:
+        if 'skills-ai' in k.lower() or 'Skills-AI' in str(data[k]):
             del data[k]
-with open(f, 'w') as fh:
-    json.dump(data, fh, indent=2)
-    fh.write('\n')
-" "$HOME/.claude/marketplace/repos.json" 2>/dev/null || true
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as fh:
+        json.dump(data, fh, indent=2)
+        fh.write('\n')
+    os.replace(tmppath, f)
+except:
+    os.unlink(tmppath)
+    raise
+" "$KNOWN_MARKETPLACES" 2>/dev/null || true
   fi
+
+  # Remove marketplace directory for skills-ai
+  rm -rf "$MARKETPLACE_DIR"
 
   # Ensure settings.json exists as valid JSON
   mkdir -p "$(dirname "$SETTINGS_FILE")"
@@ -644,31 +677,49 @@ test_T4_clean_uninstall() {
     fail "settings.json is corrupted after uninstall"
   fi
 
-  # Step 4: Remove plugin from enabledPlugins (simulates /plugin uninstall)
+  # Step 4: Remove plugin from enabledPlugins and clean empty key (simulates /plugin uninstall)
   info "Removing plugin from enabledPlugins..."
   /usr/bin/python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
+import json, sys, tempfile, os
+settings_file = sys.argv[1]
+with open(settings_file) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
-ep.pop('statusline@skills-ai', None)
-if not ep:
-    s.pop('enabledPlugins', None)
-s['enabledPlugins'] = ep if ep else {}
-with open(sys.argv[1], 'w') as f:
-    json.dump(s, f, indent=2)
-    f.write('\n')
+if isinstance(ep, dict):
+    ep.pop('statusline@skills-ai', None)
+    if not ep:
+        s.pop('enabledPlugins', None)
+    else:
+        s['enabledPlugins'] = ep
+elif isinstance(ep, list):
+    ep = [p for p in ep if 'skills-ai' not in str(p).lower()]
+    if not ep:
+        s.pop('enabledPlugins', None)
+    else:
+        s['enabledPlugins'] = ep
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(settings_file), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as f:
+        json.dump(s, f, indent=2)
+        f.write('\n')
+    os.replace(tmppath, settings_file)
+except:
+    os.unlink(tmppath)
+    raise
 " "$SETTINGS_FILE" 2>&1 || true
 
-  # Step 5: Verify enabledPlugins is empty or missing
+  # Step 5: Verify enabledPlugins entry is gone
   if [ -f "$SETTINGS_FILE" ]; then
     local has_plugin
     has_plugin=$(/usr/bin/python3 -c "
 import json, sys
 with open(sys.argv[1]) as f:
     s = json.load(f)
-plugins = s.get('enabledPlugins', [])
-found = any('skills-ai' in str(p).lower() or 'statusline' in str(p).lower() for p in plugins)
+plugins = s.get('enabledPlugins', {})
+if isinstance(plugins, dict):
+    found = any('skills-ai' in k.lower() or 'statusline' in k.lower() for k in plugins)
+else:
+    found = any('skills-ai' in str(p).lower() or 'statusline' in str(p).lower() for p in plugins)
 print('yes' if found else 'no')
 " "$SETTINGS_FILE" 2>/dev/null) || true
 
@@ -680,6 +731,36 @@ print('yes' if found else 'no')
   else
     pass "settings.json removed (clean state)"
   fi
+
+  # Step 6: Verify empty enabledPlugins key is removed (not left as {})
+  if [ -f "$SETTINGS_FILE" ]; then
+    local has_empty_ep
+    has_empty_ep=$(/usr/bin/python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+ep = s.get('enabledPlugins', None)
+if ep is not None and not ep:
+    print('empty')
+elif ep is None:
+    print('absent')
+else:
+    print('populated')
+" "$SETTINGS_FILE" 2>/dev/null) || true
+
+    if [ "$has_empty_ep" = "absent" ]; then
+      pass "Empty enabledPlugins key removed from settings.json"
+    elif [ "$has_empty_ep" = "empty" ]; then
+      fail "Empty enabledPlugins {} left in settings.json"
+    else
+      pass "enabledPlugins still has other entries (expected)"
+    fi
+  fi
+
+  # Step 7: Remove plugin cache (simulates /plugin uninstall removing cached files)
+  info "Removing plugin cache..."
+  rm -rf "$PLUGIN_CACHE"
+  assert_dir_not_exists "$PLUGIN_CACHE" "Plugin cache directory removed"
 }
 
 test_T5_dirty_uninstall() {
@@ -1058,6 +1139,190 @@ test_T10_cache_cleared() {
   rm -f "$stderr_file"
 }
 
+test_T11_full_cleanup() {
+  test_header "T11: Full Lifecycle Cleanup" \
+    "Install → configure → uninstall.sh → plugin uninstall → marketplace remove → verify ALL artifacts gone"
+
+  # Start from guaranteed clean state
+  reset_clean_state
+
+  # Install and configure
+  info "Installing and configuring plugin..."
+  install_plugin_manual
+  simulate_session_start >/dev/null 2>&1 || true
+
+  # Verify we have a fully installed state to clean
+  if ! verify_settings_has_statusline; then
+    skip "Could not set up fully installed state"
+    return
+  fi
+  assert_dir_exists "$PLUGIN_CACHE" "Plugin cache exists before cleanup"
+
+  # Simulate adding marketplace entry to known_marketplaces.json
+  info "Adding skills-ai marketplace entry..."
+  /usr/bin/python3 -c "
+import json, sys, tempfile, os
+f = sys.argv[1]
+if os.path.exists(f):
+    with open(f) as fh:
+        data = json.load(fh)
+else:
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    data = {}
+data['skills-ai'] = {
+    'source': {'source': 'github', 'repo': 'thariman/Skills-AI'},
+    'installLocation': sys.argv[2],
+    'lastUpdated': '2026-01-01T00:00:00.000Z'
+}
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as fh:
+        json.dump(data, fh, indent=2)
+        fh.write('\n')
+    os.replace(tmppath, f)
+except:
+    os.unlink(tmppath)
+    raise
+" "$KNOWN_MARKETPLACES" "$MARKETPLACE_DIR" 2>/dev/null || true
+
+  # Create a dummy marketplace dir (simulates /marketplace add having cloned the repo)
+  mkdir -p "$MARKETPLACE_DIR"
+
+  # ── Phase 1: Run uninstall.sh ──
+  info "Phase 1: Running uninstall.sh..."
+  bash "$(get_uninstall_sh_path)" >/dev/null 2>&1 || true
+
+  # Verify: statusLine removed
+  if verify_settings_clean; then
+    pass "Phase 1: statusLine removed from settings.json"
+  else
+    fail "Phase 1: statusLine still in settings.json after uninstall.sh"
+  fi
+
+  # ── Phase 2: Simulate /plugin uninstall ──
+  info "Phase 2: Simulating plugin uninstall..."
+
+  # Remove from enabledPlugins and clean empty key
+  /usr/bin/python3 -c "
+import json, sys, tempfile, os
+settings_file = sys.argv[1]
+with open(settings_file) as f:
+    s = json.load(f)
+ep = s.get('enabledPlugins', {})
+if isinstance(ep, dict):
+    ep.pop('statusline@skills-ai', None)
+    if not ep:
+        s.pop('enabledPlugins', None)
+    else:
+        s['enabledPlugins'] = ep
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(settings_file), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as f:
+        json.dump(s, f, indent=2)
+        f.write('\n')
+    os.replace(tmppath, settings_file)
+except:
+    os.unlink(tmppath)
+    raise
+" "$SETTINGS_FILE" 2>/dev/null || true
+
+  # Remove plugin cache
+  rm -rf "$PLUGIN_CACHE"
+
+  # Verify: cache gone
+  assert_dir_not_exists "$PLUGIN_CACHE" "Phase 2: Plugin cache directory removed"
+
+  # Verify: enabledPlugins cleaned
+  local ep_state
+  ep_state=$(/usr/bin/python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+ep = s.get('enabledPlugins', None)
+if ep is None:
+    print('absent')
+elif not ep:
+    print('empty')
+else:
+    print('populated')
+" "$SETTINGS_FILE" 2>/dev/null) || true
+
+  if [ "$ep_state" = "absent" ]; then
+    pass "Phase 2: enabledPlugins key removed"
+  elif [ "$ep_state" = "empty" ]; then
+    fail "Phase 2: Empty enabledPlugins {} left behind"
+  else
+    pass "Phase 2: enabledPlugins has other entries (acceptable)"
+  fi
+
+  # ── Phase 3: Simulate /marketplace remove ──
+  info "Phase 3: Simulating marketplace remove..."
+
+  # Remove from known_marketplaces.json
+  /usr/bin/python3 -c "
+import json, sys, tempfile, os
+f = sys.argv[1]
+with open(f) as fh:
+    data = json.load(fh)
+for k in list(data.keys()):
+    if 'skills-ai' in k.lower():
+        del data[k]
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as fh:
+        json.dump(data, fh, indent=2)
+        fh.write('\n')
+    os.replace(tmppath, f)
+except:
+    os.unlink(tmppath)
+    raise
+" "$KNOWN_MARKETPLACES" 2>/dev/null || true
+
+  # Remove marketplace directory
+  rm -rf "$MARKETPLACE_DIR"
+
+  # ── Phase 4: Verify ALL artifacts are gone ──
+  info "Phase 4: Verifying complete cleanup..."
+
+  # 4a: statusLine gone
+  assert_file_not_contains "$SETTINGS_FILE" '"statusLine"' \
+    "settings.json has no statusLine key"
+
+  # 4b: enabledPlugins gone or no skills-ai entries
+  assert_file_not_contains "$SETTINGS_FILE" 'skills-ai' \
+    "settings.json has no skills-ai references"
+
+  # 4c: Plugin cache directory gone
+  assert_dir_not_exists "$PLUGIN_CACHE" "Plugin cache directory fully removed"
+
+  # 4d: Marketplace directory gone
+  assert_dir_not_exists "$MARKETPLACE_DIR" "Marketplace directory fully removed"
+
+  # 4e: known_marketplaces.json has no skills-ai entry
+  if [ -f "$KNOWN_MARKETPLACES" ]; then
+    assert_file_not_contains "$KNOWN_MARKETPLACES" 'skills-ai' \
+      "known_marketplaces.json has no skills-ai entry"
+  else
+    pass "known_marketplaces.json absent (acceptable)"
+  fi
+
+  # 4f: settings.json is valid JSON with no stale entries
+  local remaining_keys
+  remaining_keys=$(/usr/bin/python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+print(' '.join(sorted(s.keys())) if s else '(empty)')
+" "$SETTINGS_FILE" 2>/dev/null) || true
+  info "Remaining settings.json keys: $remaining_keys"
+
+  if /usr/bin/python3 -c "import json; json.load(open('$SETTINGS_FILE'))" 2>/dev/null; then
+    pass "settings.json is valid JSON after full cleanup"
+  else
+    fail "settings.json is corrupted after full cleanup"
+  fi
+}
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -1080,11 +1345,21 @@ test_T7_reinstall_after_dirty
 test_T8_missing_python3
 test_T9_malformed_settings
 test_T10_cache_cleared
+test_T11_full_cleanup
 
 # ── Final Cleanup ──────────────────────────────────────────────────────────
 
 banner "Cleanup"
 reset_clean_state
+
+# Verify final cleanup actually worked
+if verify_settings_clean; then
+  pass "Final: statusLine removed from settings.json"
+else
+  fail "Final: statusLine still in settings.json after cleanup"
+fi
+assert_dir_not_exists "$PLUGIN_CACHE" "Final: plugin cache directory removed"
+assert_dir_not_exists "$MARKETPLACE_DIR" "Final: marketplace directory removed"
 pass "Test environment cleaned up"
 
 # ── Summary ────────────────────────────────────────────────────────────────
