@@ -15,45 +15,81 @@ A rich status line for Claude Code that displays at-a-glance session info:
 - **Context window usage** — 10-segment progress bar with color-coded thresholds
 
 ```
-Claude Opus 4.6 │ Fixing auth bug │ my-project │ main ✔ █████░░░░░ 50%
+Opus 4.6 │ Fixing auth bug │ my-project │ main ✔ █████░░░░░ 50%
 ```
 
 Context window colors shift from green → yellow → orange → red as usage increases, with a skull (💀) warning above 80%.
 
 ## Installation
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
 
 **1. Add the marketplace:**
 
-```bash
-claude plugin marketplace add thariman/Skills-AI
+```
+/plugin marketplace add thariman/Skills-AI
 ```
 
-**2. Install and configure:**
+**2. Install the plugin:**
 
-```bash
-claude plugin install statusline
-bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/setup.sh
+```
+/plugin install statusline@skills-ai
 ```
 
-**3. Start Claude Code** — the statusline appears at the bottom of your terminal.
+**3. Restart Claude Code** — the statusline is automatically configured on the first session start via a `SessionStart` hook and appears after one restart.
 
-> **Note:** The setup script must be run once after install to configure `~/.claude/settings.json`. A SessionStart hook also runs this automatically, but takes effect on the next session.
+> **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which writes the `statusLine` config to `~/.claude/settings.json`. The status bar appears after your next restart (or potentially after your first interaction in the same session via settings auto-reload).
 
 ## Uninstalling
 
+**1. Remove the statusLine config:**
+
 ```bash
-claude plugin uninstall statusline
+bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
 ```
 
-The statusline config is automatically removed from `settings.json` on the next session.
+**2. Uninstall the plugin:**
+
+```
+/plugin uninstall statusline@skills-ai
+```
+
+> **Important:** Run `uninstall.sh` first. The plugin system doesn't have a lifecycle hook for uninstall, so if you skip step 1, the `statusLine` config will remain orphaned in `settings.json` (it won't cause errors, but you'll need to manually remove the `statusLine` key).
 
 To remove the marketplace source entirely:
 
-```bash
-claude plugin marketplace remove skills-ai
 ```
+/plugin marketplace remove skills-ai
+```
+
+## How It Works
+
+```
+Plugin Install
+  └─ adds to enabledPlugins, caches plugin files
+
+Next Session Start
+  └─ SessionStart hook fires → setup.sh runs
+       └─ python3 writes statusLine config to ~/.claude/settings.json
+
+Next Session (or auto-reload)
+  └─ Claude reads statusLine config → runs bash run.sh
+       └─ run.sh finds node → exec node statusline.js
+            └─ reads JSON from stdin → renders status bar
+```
+
+The `SessionStart` hook also acts as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, the next session start will re-add it automatically.
+
+## Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| `python3` not available | `setup.sh` fails with clear error message |
+| `settings.json` missing | Created from scratch with valid JSON |
+| `settings.json` malformed | `setup.sh` fails gracefully, doesn't corrupt further |
+| Plugin cache cleared | `run.sh` exits silently (no crash) |
+| Config manually deleted | Self-heals on next session start |
+| Existing manual statusLine | Overwritten by plugin config |
 
 ## Compatibility
 
@@ -76,12 +112,12 @@ plugins/<name>/
 ├── .claude-plugin/
 │   └── plugin.json        # Plugin metadata (name, version, description)
 ├── hooks/
-│   └── hooks.json         # Hook event registrations
+│   └── hooks.json         # Hook event registrations (SessionStart)
 ├── scripts/
-│   ├── setup.sh           # Post-install configuration
+│   ├── setup.sh           # Auto-configuration on session start
 │   ├── run.sh             # Runtime wrapper (node discovery)
 │   └── uninstall.sh       # Pre-uninstall cleanup
-└── <implementation files>
+└── statusline.js          # Status bar renderer (Node.js)
 ```
 
 ## License
