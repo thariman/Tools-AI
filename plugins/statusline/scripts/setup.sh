@@ -17,7 +17,9 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   echo '{}' > "$SETTINGS_FILE"
 fi
 
-# Skip if already configured with the correct path (use -F for fixed-string match)
+# Skip if already configured with THIS version's run.sh path (exact match).
+# On plugin version upgrade, the new path won't match the old → falls through
+# to the python update below, which overwrites with the correct new path.
 if grep -qF "$RUN_SH" "$SETTINGS_FILE" 2>/dev/null; then
   exit 0
 fi
@@ -38,7 +40,7 @@ fi
 
 # Use python3 to safely read/write JSON
 if ! "$PYTHON" -c "
-import json, sys
+import json, sys, tempfile, os
 
 settings_file = sys.argv[1]
 run_sh = sys.argv[2]
@@ -51,9 +53,15 @@ settings['statusLine'] = {
     'command': 'bash \"' + run_sh + '\"'
 }
 
-with open(settings_file, 'w') as f:
-    json.dump(settings, f, indent=2)
-    f.write('\n')
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(settings_file), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as f:
+        json.dump(settings, f, indent=2)
+        f.write('\n')
+    os.replace(tmppath, settings_file)
+except:
+    os.unlink(tmppath)
+    raise
 " "$SETTINGS_FILE" "$RUN_SH" 2>&1; then
   echo "statusline setup: failed to update settings.json" >&2
   exit 1

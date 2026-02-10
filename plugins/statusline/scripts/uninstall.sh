@@ -29,7 +29,7 @@ if [ -z "$PYTHON" ]; then
 fi
 
 if ! "$PYTHON" -c "
-import json, sys
+import json, sys, tempfile, os
 
 settings_file = sys.argv[1]
 
@@ -38,9 +38,15 @@ with open(settings_file) as f:
 
 settings.pop('statusLine', None)
 
-with open(settings_file, 'w') as f:
-    json.dump(settings, f, indent=2)
-    f.write('\n')
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(settings_file), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as f:
+        json.dump(settings, f, indent=2)
+        f.write('\n')
+    os.replace(tmppath, settings_file)
+except:
+    os.unlink(tmppath)
+    raise
 " "$SETTINGS_FILE" 2>&1; then
   echo "Error: failed to update settings.json" >&2
   exit 1

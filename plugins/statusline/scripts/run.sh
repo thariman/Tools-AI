@@ -8,6 +8,7 @@ STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"
 
 # Bail if statusline.js is missing (e.g. cache was cleared)
 if [ ! -f "$STATUSLINE_JS" ]; then
+  echo "statusline: statusline.js not found (plugin cache may have been cleared)" >&2
   exit 1
 fi
 
@@ -43,6 +44,7 @@ find_node() {
 
 NODE_BIN="$(find_node)"
 if [ -z "$NODE_BIN" ]; then
+  echo "statusline: node not found (tried PATH, nvm, fnm, volta, nodeenv, system paths)" >&2
   exit 1
 fi
 
