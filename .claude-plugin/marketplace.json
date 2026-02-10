@@ -1,0 +1,18 @@
+{
+  "name": "skills-ai",
+  "owner": {
+    "name": "thariman"
+  },
+  "metadata": {
+    "description": "Custom Claude Code plugins",
+    "homepage": "https://github.com/thariman/Skills-AI"
+  },
+  "plugins": [
+    {
+      "name": "statusline",
+      "version": "1.0.0",
+      "source": "./plugins/statusline",
+      "description": "Status line showing model, git branch/status, active task, directory, and context window usage"
+    }
+  ]
+}
