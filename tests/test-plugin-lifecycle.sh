@@ -11,6 +11,7 @@
 # Requirements:
 #   - Claude CLI at /home/tony/.local/bin/claude
 #   - Python3 available
+#   - python3-pexpect installed (for TUI testing via real PTY)
 #   - Node.js available (via nodeenv at ~/.local/share/nodeenv/bin/node)
 #   - Internet access (for marketplace add from GitHub)
 # ============================================================================
@@ -30,6 +31,7 @@ PLUGIN_NAME="statusline@skills-ai"
 # Plugin cache structure: $PLUGIN_CACHE/statusline/<version>/
 # Use a glob to find the version directory dynamically
 PLUGIN_VERSION="1.0.0"
+TUI_DRIVER=""  # Path to pexpect-based TUI driver (created at runtime)
 
 # ── Counters ───────────────────────────────────────────────────────────────
 
@@ -474,29 +476,145 @@ run_minimal_claude_session() {
   timeout "$timeout_sec" $CLAUDE_CLI -p "say ok" --dangerously-skip-permissions --no-session-persistence 2>&1 || true
 }
 
+create_tui_driver() {
+  # Creates a pexpect-based TUI driver script for testing Claude CLI.
+  # pexpect creates a real PTY (required for SessionStart hooks to fire)
+  # and provides structured output for better test assertions.
+  TUI_DRIVER="/tmp/claude_tui_driver_$$.py"
+  cat > "$TUI_DRIVER" << 'PYEOF'
+#!/usr/bin/env python3
+"""Drive Claude CLI TUI via pexpect for automated testing.
+
+Launches Claude in a real PTY (required for SessionStart hooks),
+waits for initialization, allows hooks to fire, then exits cleanly.
+
+Output: JSON on stdout with session details.
+Exit: 0 if TUI started, 1 if failed.
+"""
+import pexpect
+import sys
+import time
+import json
+import argparse
+import os
+import signal
+
+def run_session(cli, wait, timeout):
+    result = {
+        'started': False,
+        'duration': 0.0,
+        'exit_clean': False,
+        'error': '',
+    }
+    t0 = time.time()
+
+    try:
+        env = os.environ.copy()
+        env.setdefault('TERM', 'xterm-256color')
+
+        child = pexpect.spawn(
+            cli,
+            args=['--dangerously-skip-permissions'],
+            timeout=timeout,
+            encoding='utf-8',
+            dimensions=(24, 120),
+            env=env,
+        )
+
+        # Wait for any output - proves TUI has started rendering
+        try:
+            child.expect('.+', timeout=15)
+            result['started'] = True
+        except pexpect.TIMEOUT:
+            result['error'] = 'No output from Claude CLI within 15s'
+            child.close(force=True)
+            result['duration'] = time.time() - t0
+            return result
+        except pexpect.EOF:
+            result['error'] = 'Claude CLI exited immediately'
+            result['duration'] = time.time() - t0
+            return result
+
+        # Wait remaining time for SessionStart hooks to complete
+        elapsed = time.time() - t0
+        remaining = wait - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+
+        # SIGTERM for clean shutdown (Claude's Ink TUI doesn't process
+        # typed input from pexpect, but handles SIGTERM gracefully)
+        try:
+            os.kill(child.pid, signal.SIGTERM)
+            child.expect(pexpect.EOF, timeout=5)
+            result['exit_clean'] = True
+        except pexpect.TIMEOUT:
+            pass
+        except pexpect.EOF:
+            result['exit_clean'] = True
+
+        if child.isalive():
+            child.close(force=True)
+
+    except Exception as e:
+        result['error'] = str(e)
+
+    result['duration'] = time.time() - t0
+    return result
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description='Claude CLI TUI test driver')
+    p.add_argument('--cli', required=True, help='Path to Claude CLI binary')
+    p.add_argument('--wait', type=int, default=12, help='Seconds to wait for hooks')
+    p.add_argument('--timeout', type=int, default=30, help='Overall session timeout')
+    a = p.parse_args()
+
+    r = run_session(a.cli, a.wait, a.timeout)
+    print(json.dumps(r))
+    sys.exit(0 if r['started'] else 1)
+PYEOF
+  chmod +x "$TUI_DRIVER"
+}
+
+cleanup_tui_driver() {
+  if [ -n "$TUI_DRIVER" ] && [ -f "$TUI_DRIVER" ]; then
+    rm -f "$TUI_DRIVER"
+    TUI_DRIVER=""
+  fi
+}
+
 run_real_claude_session() {
-  # Runs a REAL interactive Claude session in tmux that fires SessionStart hooks.
-  # SessionStart hooks ONLY fire in interactive TUI mode (not -p/print mode,
-  # not piped stdin). tmux provides a real PTY for the TUI.
-  # Requires: tmux installed on the system.
+  # Runs a REAL interactive Claude session that fires SessionStart hooks.
+  # Uses pexpect to create a real PTY (required for hooks to fire).
+  # Returns 0 if TUI started successfully, 1 otherwise.
   local wait_sec="${1:-12}"
-  local session_name="statusline-test-$$"
 
-  # Kill any leftover session
-  tmux kill-session -t "$session_name" 2>/dev/null || true
+  # Ensure TUI driver exists
+  if [ -z "$TUI_DRIVER" ] || [ ! -f "$TUI_DRIVER" ]; then
+    create_tui_driver
+  fi
 
-  # Start Claude in a detached tmux session (real PTY)
-  tmux new-session -d -s "$session_name" "$CLAUDE_CLI --dangerously-skip-permissions" 2>/dev/null
-  if [ $? -ne 0 ]; then
-    info "tmux failed to start session"
+  local result
+  result=$(python3 "$TUI_DRIVER" \
+    --cli "$CLAUDE_CLI" \
+    --wait "$wait_sec" \
+    --timeout $((wait_sec + 10))) || true
+
+  if [ -z "$result" ]; then
+    info "TUI driver returned no output"
     return 1
   fi
 
-  # Wait for Claude to initialize and fire SessionStart hooks
-  sleep "$wait_sec"
+  # Parse JSON result
+  local started exit_clean duration error
+  started=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['started'])" 2>/dev/null)
+  exit_clean=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['exit_clean'])" 2>/dev/null)
+  duration=$(echo "$result" | python3 -c "import json,sys; print(f\"{json.load(sys.stdin)['duration']:.1f}\")" 2>/dev/null)
+  error=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('error',''))" 2>/dev/null)
 
-  # Kill the session (we don't need to interact, just let hooks fire)
-  tmux kill-session -t "$session_name" 2>/dev/null || true
+  info "TUI session: started=$started, exit_clean=$exit_clean, duration=${duration}s"
+  [ -n "$error" ] && info "TUI error: $error"
+
+  [ "$started" = "True" ] && return 0 || return 1
 }
 
 install_plugin_real() {
@@ -605,10 +723,10 @@ preflight() {
     ok=false
   fi
 
-  if command -v tmux &>/dev/null; then
-    pass "tmux available (required for real session tests)"
+  if python3 -c "import pexpect" 2>/dev/null; then
+    pass "python3-pexpect available (required for TUI tests)"
   else
-    fail "tmux not found (required for T21 real session test)"
+    fail "python3-pexpect not installed (required for T21 TUI test)"
     ok=false
   fi
 
@@ -2107,6 +2225,7 @@ test_T21_real_restart_count
 # ── Final Cleanup ──────────────────────────────────────────────────────────
 
 banner "Cleanup"
+cleanup_tui_driver
 reset_clean_state
 
 # Also reset settings.json to {} to remove any test-injected keys (e.g. otherPlugin from T19)
