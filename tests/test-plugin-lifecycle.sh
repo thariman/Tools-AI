@@ -480,13 +480,17 @@ create_tui_driver() {
   # Creates a pexpect-based TUI driver script for testing Claude CLI.
   # pexpect creates a real PTY (required for SessionStart hooks to fire)
   # and provides structured output for better test assertions.
+  #
+  # Supports --interact flag to send user input after wait period,
+  # which triggers Claude's settings.json auto-reload mechanism.
   TUI_DRIVER="/tmp/claude_tui_driver_$$.py"
   cat > "$TUI_DRIVER" << 'PYEOF'
 #!/usr/bin/env python3
 """Drive Claude CLI TUI via pexpect for automated testing.
 
 Launches Claude in a real PTY (required for SessionStart hooks),
-waits for initialization, allows hooks to fire, then exits cleanly.
+waits for initialization, optionally sends user input (--interact),
+then exits cleanly.
 
 Output: JSON on stdout with session details.
 Exit: 0 if TUI started, 1 if failed.
@@ -499,11 +503,13 @@ import argparse
 import os
 import signal
 
-def run_session(cli, wait, timeout):
+def run_session(cli, wait, timeout, interact=False, interact_wait=10):
     result = {
         'started': False,
         'duration': 0.0,
         'exit_clean': False,
+        'interact_sent': False,
+        'interact_response': False,
         'error': '',
     }
     t0 = time.time()
@@ -535,14 +541,35 @@ def run_session(cli, wait, timeout):
             result['duration'] = time.time() - t0
             return result
 
-        # Wait remaining time for SessionStart hooks to complete
+        # Wait for SessionStart hooks to complete
         elapsed = time.time() - t0
         remaining = wait - elapsed
         if remaining > 0:
             time.sleep(remaining)
 
-        # SIGTERM for clean shutdown (Claude's Ink TUI doesn't process
-        # typed input from pexpect, but handles SIGTERM gracefully)
+        # Optionally send user input to trigger settings.json hot-reload
+        if interact:
+            try:
+                child.sendline("say ok")
+                result['interact_sent'] = True
+
+                # Wait for Claude to process the input and respond
+                # This triggers the settings.json reload cycle
+                try:
+                    child.expect('.+', timeout=interact_wait)
+                    result['interact_response'] = True
+                except pexpect.TIMEOUT:
+                    pass  # Timeout waiting for response is acceptable
+                except pexpect.EOF:
+                    result['interact_response'] = True
+
+                # Additional wait for statusline render cycle after response
+                time.sleep(3)
+
+            except Exception as e:
+                result['error'] = f'interact error: {e}'
+
+        # SIGTERM for clean shutdown
         try:
             os.kill(child.pid, signal.SIGTERM)
             child.expect(pexpect.EOF, timeout=5)
@@ -565,10 +592,14 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description='Claude CLI TUI test driver')
     p.add_argument('--cli', required=True, help='Path to Claude CLI binary')
     p.add_argument('--wait', type=int, default=12, help='Seconds to wait for hooks')
-    p.add_argument('--timeout', type=int, default=30, help='Overall session timeout')
+    p.add_argument('--timeout', type=int, default=60, help='Overall session timeout')
+    p.add_argument('--interact', action='store_true',
+                    help='Send user input after wait period to trigger settings reload')
+    p.add_argument('--interact-wait', type=int, default=10,
+                    help='Seconds to wait for response after sending input')
     a = p.parse_args()
 
-    r = run_session(a.cli, a.wait, a.timeout)
+    r = run_session(a.cli, a.wait, a.timeout, a.interact, a.interact_wait)
     print(json.dumps(r))
     sys.exit(0 if r['started'] else 1)
 PYEOF
@@ -585,19 +616,31 @@ cleanup_tui_driver() {
 run_real_claude_session() {
   # Runs a REAL interactive Claude session that fires SessionStart hooks.
   # Uses pexpect to create a real PTY (required for hooks to fire).
+  # Args:
+  #   $1 - wait seconds (default: 12)
+  #   $2 - "interact" to send user input after wait (triggers settings reload)
   # Returns 0 if TUI started successfully, 1 otherwise.
   local wait_sec="${1:-12}"
+  local interact_flag="${2:-}"
 
   # Ensure TUI driver exists
   if [ -z "$TUI_DRIVER" ] || [ ! -f "$TUI_DRIVER" ]; then
     create_tui_driver
   fi
 
+  local interact_args=""
+  local timeout_sec=$((wait_sec + 10))
+  if [ "$interact_flag" = "interact" ]; then
+    interact_args="--interact --interact-wait 10"
+    timeout_sec=$((wait_sec + 25))  # Extra time for interaction + response
+  fi
+
   local result
   result=$(python3 "$TUI_DRIVER" \
     --cli "$CLAUDE_CLI" \
     --wait "$wait_sec" \
-    --timeout $((wait_sec + 10))) || true
+    --timeout "$timeout_sec" \
+    $interact_args) || true
 
   if [ -z "$result" ]; then
     info "TUI driver returned no output"
@@ -605,13 +648,18 @@ run_real_claude_session() {
   fi
 
   # Parse JSON result
-  local started exit_clean duration error
+  local started exit_clean duration error interact_sent interact_response
   started=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['started'])" 2>/dev/null)
   exit_clean=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin)['exit_clean'])" 2>/dev/null)
   duration=$(echo "$result" | python3 -c "import json,sys; print(f\"{json.load(sys.stdin)['duration']:.1f}\")" 2>/dev/null)
   error=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('error',''))" 2>/dev/null)
+  interact_sent=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('interact_sent', False))" 2>/dev/null)
+  interact_response=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('interact_response', False))" 2>/dev/null)
 
   info "TUI session: started=$started, exit_clean=$exit_clean, duration=${duration}s"
+  if [ "$interact_flag" = "interact" ]; then
+    info "TUI interact: sent=$interact_sent, response=$interact_response"
+  fi
   [ -n "$error" ] && info "TUI error: $error"
 
   [ "$started" = "True" ] && return 0 || return 1
@@ -2092,8 +2140,8 @@ test_T20_full_one_restart_lifecycle() {
 }
 
 test_T21_real_restart_count() {
-  test_header "T21: Real Restart Count (How Many Sessions Before Statusline RENDERS?)" \
-    "Real install → marker run.sh → real TUI sessions → detect actual rendering via marker file"
+  test_header "T21: Zero-Restart Rendering (Statusline Appears After First Interaction)" \
+    "Real install → marker run.sh → TUI session with interaction → detect rendering via marker"
 
   # ── Step 1: Full real cleanup and fresh install ──
   reset_clean_state_real
@@ -2112,7 +2160,6 @@ test_T21_real_restart_count() {
   if verify_settings_clean; then
     pass "After install: no statusLine in settings.json"
   else
-    # If statusLine is already present after install, that's the 0-restart case
     info "After install: statusLine already present (install may run setup.sh)"
     info "settings.json: $(cat "$SETTINGS_FILE")"
   fi
@@ -2121,7 +2168,7 @@ test_T21_real_restart_count() {
   # ── Step 2: Install marker run.sh to detect actual rendering ──
   # The marker approach: replace run.sh with a script that creates a file when invoked.
   # If Claude renders the statusline, it invokes run.sh → marker file appears.
-  # If statusLine config isn't in settings.json yet, Claude never invokes run.sh → no marker.
+  # If statusLine config isn't loaded yet, Claude never invokes run.sh → no marker.
   local marker_file="/tmp/statusline-marker.txt"
   rm -f "$marker_file"
 
@@ -2132,53 +2179,91 @@ test_T21_real_restart_count() {
   fi
   pass "Marker run.sh installed (writes $marker_file when invoked)"
 
-  # ── Step 3: Run up to 3 real TUI sessions, checking rendering after each ──
+  # ── Step 3: Session 1 WITH interaction ──
+  # Timeline: TUI starts → SessionStart hook writes config (~500ms) → wait 8s →
+  # send "say ok" → Claude auto-reloads settings.json → statusline renders → marker appears
   local rendered_in_session=0
   local config_written_in_session=0
-  local max_sessions=3
 
-  for session_num in $(seq 1 $max_sessions); do
-    # Clear marker before each session
+  rm -f "$marker_file"
+  local has_config_before="no"
+  if verify_settings_has_statusline; then
+    has_config_before="yes"
+  fi
+
+  info "── Session 1 WITH INTERACTION (config before: $has_config_before) ──"
+  info "Starting real TUI session via pexpect (wait 8s → send input → wait 10s)..."
+  run_real_claude_session 8 interact
+
+  # Check: Did SessionStart hook write statusLine config?
+  if verify_settings_has_statusline; then
+    if [ "$has_config_before" = "no" ]; then
+      config_written_in_session=1
+      info "Session 1: statusLine config WRITTEN to settings.json (hook fired)"
+    fi
+  else
+    info "Session 1: No statusLine config in settings.json"
+  fi
+
+  # Check: Did run.sh get invoked? (= statusline RENDERED after settings reload)
+  if [ -f "$marker_file" ]; then
+    info "Session 1: MARKER FILE FOUND → statusline was RENDERED (0 restarts!)"
+    rendered_in_session=1
+  else
+    info "Session 1: No marker file → statusline was NOT rendered in this session"
+  fi
+
+  # ── Step 4: If session 1 failed, try session 2 WITHOUT interaction (fallback) ──
+  if [ "$rendered_in_session" -eq 0 ]; then
     rm -f "$marker_file"
-
-    # Check pre-session state
-    local has_config_before="no"
+    has_config_before="no"
     if verify_settings_has_statusline; then
       has_config_before="yes"
     fi
 
-    info "── Session $session_num (config before: $has_config_before) ──"
-    info "Starting real TUI session $session_num via pexpect (waiting 15s)..."
+    info "── Session 2 WITHOUT interaction (fallback, config before: $has_config_before) ──"
+    info "Starting real TUI session via pexpect (waiting 15s, no interaction)..."
     run_real_claude_session 15
 
-    # Check 1: Did run.sh get invoked? (= statusline RENDERED)
-    if [ -f "$marker_file" ]; then
-      info "Session $session_num: MARKER FILE FOUND → statusline was RENDERED"
-      if [ "$rendered_in_session" -eq 0 ]; then
-        rendered_in_session=$session_num
-      fi
-    else
-      info "Session $session_num: No marker file → statusline was NOT rendered"
-    fi
-
-    # Check 2: Did SessionStart hook write statusLine config?
+    # Check config
     if verify_settings_has_statusline; then
       if [ "$config_written_in_session" -eq 0 ] && [ "$has_config_before" = "no" ]; then
-        config_written_in_session=$session_num
-        info "Session $session_num: statusLine config WRITTEN to settings.json (hook fired)"
+        config_written_in_session=2
+        info "Session 2: statusLine config WRITTEN to settings.json"
       fi
+    fi
+
+    # Check marker
+    if [ -f "$marker_file" ]; then
+      info "Session 2: MARKER FILE FOUND → statusline was RENDERED (1 restart)"
+      rendered_in_session=2
     else
-      info "Session $session_num: No statusLine config in settings.json"
+      info "Session 2: No marker file → statusline was NOT rendered"
+    fi
+  fi
+
+  # ── Step 5: If session 2 also failed, try session 3 (last resort) ──
+  if [ "$rendered_in_session" -eq 0 ]; then
+    rm -f "$marker_file"
+    has_config_before="no"
+    if verify_settings_has_statusline; then
+      has_config_before="yes"
     fi
 
-    # Early exit if we've seen rendering
-    if [ "$rendered_in_session" -gt 0 ]; then
-      info "Statusline rendered — no need for more sessions"
-      break
-    fi
-  done
+    info "── Session 3 (last resort, config before: $has_config_before) ──"
+    run_real_claude_session 15
 
-  # ── Step 4: Analyze results ──
+    if verify_settings_has_statusline && [ "$config_written_in_session" -eq 0 ] && [ "$has_config_before" = "no" ]; then
+      config_written_in_session=3
+    fi
+
+    if [ -f "$marker_file" ]; then
+      info "Session 3: MARKER FILE FOUND → statusline rendered (2 restarts)"
+      rendered_in_session=3
+    fi
+  fi
+
+  # ── Step 6: Analyze results ──
   info "=== Rendering Detection Analysis ==="
   info "Config first written in session: ${config_written_in_session:-never}"
   info "Statusline first rendered in session: ${rendered_in_session:-never}"
@@ -2189,26 +2274,23 @@ test_T21_real_restart_count() {
 
     if [ "$restarts_needed" -eq 0 ]; then
       pass "Restart count: 0 (statusline renders on FIRST session after install)"
-      info "IDEAL: No restart needed — statusline appears immediately"
+      info "IDEAL: No restart needed — settings.json hot-reload worked after interaction"
     elif [ "$restarts_needed" -eq 1 ]; then
       pass "Restart count: 1 (statusline renders on 2nd session)"
-      info "ACCEPTABLE: Config written by hook in session 1, rendered in session 2"
-      info "Timeline: install → session1 (hook writes config, no bar) → session2 (bar renders)"
+      info "ACCEPTABLE: Config written in session 1, rendered in session 2"
+      info "Note: interaction may not have triggered settings reload, or pexpect input not received"
     else
       fail "Restart count: $restarts_needed (statusline renders on session $rendered_in_session)"
       info "BAD: Too many restarts needed before statusline appears"
-      info "This confirms the 2-restart bug is still present"
     fi
 
-    # Cross-check: config should have been written before rendering
-    if [ "$config_written_in_session" -gt 0 ] && [ "$config_written_in_session" -lt "$rendered_in_session" ]; then
-      pass "Config was written (session $config_written_in_session) before rendering (session $rendered_in_session)"
-    elif [ "$config_written_in_session" -eq "$rendered_in_session" ]; then
-      info "Config written and rendered in same session (config may have existed before)"
+    # Cross-check: config should have been written before or during rendering session
+    if [ "$config_written_in_session" -gt 0 ] && [ "$config_written_in_session" -le "$rendered_in_session" ]; then
+      pass "Config written (session $config_written_in_session) before/during rendering (session $rendered_in_session)"
     fi
 
   else
-    fail "Statusline NEVER rendered in $max_sessions sessions"
+    fail "Statusline NEVER rendered in 3 sessions"
     info "Config written in session: ${config_written_in_session:-never}"
     info "settings.json: $(cat "$SETTINGS_FILE")"
     info "Check installed_plugins.json:"

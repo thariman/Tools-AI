@@ -1,7 +1,18 @@
 {
-  "description": "Status line setup hook - configures statusLine in settings.json on session start",
+  "description": "Status line setup hook - configures statusLine in settings.json on session start and on first prompt",
   "hooks": {
     "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
       {
         "hooks": [
           {

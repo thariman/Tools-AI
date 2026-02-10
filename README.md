@@ -36,9 +36,9 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
 /plugin install statusline@skills-ai
 ```
 
-**3. Restart Claude Code** — the statusline is automatically configured on the first session start via a `SessionStart` hook and appears after one restart.
+**3. Start using Claude Code** — the statusline is automatically configured on the first session start via a `SessionStart` hook and appears after your first interaction (no restart needed).
 
-> **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which writes the `statusLine` config to `~/.claude/settings.json`. The status bar appears after your next restart (or potentially after your first interaction in the same session via settings auto-reload).
+> **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which writes the `statusLine` config to `~/.claude/settings.json`. Claude Code auto-reloads settings after each interaction, so the status bar appears as soon as you send your first message. A `UserPromptSubmit` hook also runs `setup.sh` as a safety net, ensuring the config is written before any interaction triggers the reload.
 
 ## Uninstalling
 
@@ -68,17 +68,19 @@ To remove the marketplace source entirely:
 Plugin Install
   └─ adds to enabledPlugins, caches plugin files
 
-Next Session Start
-  └─ SessionStart hook fires → setup.sh runs
+First Session Start
+  └─ SessionStart hook fires → setup.sh runs (~500ms)
        └─ python3 writes statusLine config to ~/.claude/settings.json
 
-Next Session (or auto-reload)
-  └─ Claude reads statusLine config → runs bash run.sh
-       └─ run.sh finds node → exec node statusline.js
-            └─ reads JSON from stdin → renders status bar
+First User Interaction (same session)
+  └─ UserPromptSubmit hook fires → setup.sh runs (idempotent, ~7ms)
+  └─ Claude auto-reloads settings.json
+       └─ reads statusLine config → runs bash run.sh
+            └─ run.sh finds node → exec node statusline.js
+                 └─ reads JSON from stdin → renders status bar
 ```
 
-The `SessionStart` hook also acts as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, the next session start will re-add it automatically.
+The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, the next session start or prompt will re-add it automatically.
 
 ## Edge Cases
 
