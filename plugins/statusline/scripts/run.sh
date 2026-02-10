@@ -19,8 +19,18 @@ find_node() {
     eval "$(fnm env 2>/dev/null)"
     command -v node 2>/dev/null && return
   fi
+  # Try volta
+  if [ -d "$HOME/.volta" ]; then
+    export VOLTA_HOME="$HOME/.volta"
+    PATH="$VOLTA_HOME/bin:$PATH"
+    command -v node 2>/dev/null && return
+  fi
+  # Try nodeenv (used by Claude Code installer)
+  for p in "$HOME/.local/share/nodeenv/bin/node"; do
+    [ -x "$p" ] && echo "$p" && return
+  done
   # Try common locations
-  for p in /usr/local/bin/node /usr/bin/node; do
+  for p in /usr/local/bin/node /usr/bin/node /opt/homebrew/bin/node; do
     [ -x "$p" ] && echo "$p" && return
   done
 }
