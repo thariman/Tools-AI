@@ -24,24 +24,26 @@ Context window colors shift from green → yellow → orange → red as usage in
 
 Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 
-**Add the marketplace:**
+**1. Add the marketplace:**
 
 ```bash
 claude plugin marketplace add https://github.com/thariman/Skills-AI
 ```
 
-**Install and configure:**
+**2. Install and configure:**
 
 ```bash
 claude plugin install statusline
 bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/setup.sh
 ```
 
-Then start a new Claude Code session — the statusline appears at the bottom of your terminal.
+**3. Start Claude Code** — the statusline appears at the bottom of your terminal.
+
+> **Note:** The setup script must be run once after install to configure `~/.claude/settings.json`. A SessionStart hook also runs this automatically, but takes effect on the next session.
 
 ## Uninstalling
 
-Run the cleanup script first to remove the statusline config from `settings.json`, then uninstall the plugin:
+Run the cleanup script **before** uninstalling (uninstall deletes the cached scripts):
 
 ```bash
 bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
@@ -54,6 +56,18 @@ To remove the marketplace source entirely:
 claude plugin marketplace remove skills-ai
 ```
 
+## Compatibility
+
+The statusline plugin works across different Node.js installation methods:
+
+- System node (`/usr/local/bin/node`)
+- **nvm** / **fnm** (sourced automatically)
+- **volta** (detected via `VOLTA_HOME`)
+- **nodeenv** (used by Claude Code's own installer)
+- **Homebrew** (`/opt/homebrew/bin/node`)
+
+No global `node` in PATH is required — the plugin discovers it automatically.
+
 ## Plugin Structure
 
 Each plugin in this marketplace follows the standard Claude Code plugin layout:
@@ -63,9 +77,11 @@ plugins/<name>/
 ├── .claude-plugin/
 │   └── plugin.json        # Plugin metadata (name, version, description)
 ├── hooks/
-│   └── hooks.json         # Hook registrations
+│   └── hooks.json         # Hook event registrations
 ├── scripts/
-│   └── setup.sh           # Setup/install script
+│   ├── setup.sh           # Post-install configuration
+│   ├── run.sh             # Runtime wrapper (node discovery)
+│   └── uninstall.sh       # Pre-uninstall cleanup
 └── <implementation files>
 ```
 
