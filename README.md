@@ -30,26 +30,14 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 claude plugin marketplace add https://github.com/thariman/Skills-AI
 ```
 
-**Install the statusline plugin:**
+**Install and configure:**
 
 ```bash
 claude plugin install statusline
+bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/setup.sh
 ```
 
-**Start Claude Code twice:**
-
-The first session triggers the setup hook which configures your `~/.claude/settings.json`. The statusline appears from the **second session** onwards.
-
-```bash
-claude   # first run — configures settings.json, then exit
-claude   # second run — statusline appears
-```
-
-**Verify it's installed:**
-
-```bash
-claude plugin list
-```
+Then start a new Claude Code session — the statusline appears at the bottom of your terminal.
 
 ## Uninstalling
 
