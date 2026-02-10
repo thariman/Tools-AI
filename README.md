@@ -28,6 +28,8 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 
 ```bash
 claude plugin marketplace add https://github.com/thariman/Skills-AI
+# or with SSH:
+claude plugin marketplace add git@github.com:thariman/Skills-AI.git
 ```
 
 **2. Install and configure:**
