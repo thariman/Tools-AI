@@ -2092,8 +2092,8 @@ test_T20_full_one_restart_lifecycle() {
 }
 
 test_T21_real_restart_count() {
-  test_header "T21: Real Restart Count (How Many Restarts Before Statusline?)" \
-    "Real install → real CC sessions via tmux → check settings.json between each → count restarts"
+  test_header "T21: Real Restart Count (How Many Sessions Before Statusline RENDERS?)" \
+    "Real install → marker run.sh → real TUI sessions → detect actual rendering via marker file"
 
   # ── Step 1: Full real cleanup and fresh install ──
   reset_clean_state_real
@@ -2112,75 +2112,122 @@ test_T21_real_restart_count() {
   if verify_settings_clean; then
     pass "After install: no statusLine in settings.json"
   else
-    fail "After install: statusLine unexpectedly present"
-    return
+    # If statusLine is already present after install, that's the 0-restart case
+    info "After install: statusLine already present (install may run setup.sh)"
+    info "settings.json: $(cat "$SETTINGS_FILE")"
   fi
   info "settings.json after install: $(cat "$SETTINGS_FILE")"
 
-  # ── Step 2: First real Claude session (tmux, fires SessionStart hook) ──
-  info "Starting 1st real Claude session via tmux (waiting 12s for hooks)..."
-  run_real_claude_session 12
+  # ── Step 2: Install marker run.sh to detect actual rendering ──
+  # The marker approach: replace run.sh with a script that creates a file when invoked.
+  # If Claude renders the statusline, it invokes run.sh → marker file appears.
+  # If statusLine config isn't in settings.json yet, Claude never invokes run.sh → no marker.
+  local marker_file="/tmp/statusline-marker.txt"
+  rm -f "$marker_file"
 
-  # Check: Did SessionStart hook write statusLine?
-  local has_statusline_after_session1="no"
-  if verify_settings_has_statusline; then
-    has_statusline_after_session1="yes"
-    info "After session 1: statusLine IS in settings.json (hook fired)"
-  else
-    info "After session 1: statusLine NOT in settings.json (hook did not fire)"
+  if ! install_marker_run_sh; then
+    fail "Could not install marker run.sh"
+    reset_clean_state_real
+    return
   fi
+  pass "Marker run.sh installed (writes $marker_file when invoked)"
 
-  # ── Step 3: Second real Claude session ──
-  info "Starting 2nd real Claude session via tmux (waiting 12s)..."
-  run_real_claude_session 12
+  # ── Step 3: Run up to 3 real TUI sessions, checking rendering after each ──
+  local rendered_in_session=0
+  local config_written_in_session=0
+  local max_sessions=3
 
-  local has_statusline_after_session2="no"
-  if verify_settings_has_statusline; then
-    has_statusline_after_session2="yes"
-    info "After session 2: statusLine IS in settings.json"
-  else
-    info "After session 2: statusLine NOT in settings.json"
-  fi
+  for session_num in $(seq 1 $max_sessions); do
+    # Clear marker before each session
+    rm -f "$marker_file"
 
-  # ── Step 4: Determine restart count ──
-  info "=== Restart Count Analysis ==="
-
-  if [ "$has_statusline_after_session1" = "yes" ]; then
-    # Hook fired during session 1 → statusLine was written.
-    # But Claude reads settings.json BEFORE SessionStart fires.
-    # So session 1 started WITHOUT statusLine → no statusline visible in session 1.
-    # Session 2 starts WITH statusLine already present → statusline visible.
-    pass "SessionStart hook wrote statusLine during 1st session after install"
-    info "Timeline: install → session1 (no bar, hook writes config) → session2 (bar shows)"
-    info "RESULT: 1 restart needed (statusline appears on 2nd session)"
-    pass "Restart count: 1 (2 total sessions to see statusline)"
-
-    # Verify the written config is correct
-    local cmd
-    cmd=$(get_statusline_command_from_settings)
-    if [ -n "$cmd" ]; then
-      pass "statusLine command is valid: $cmd"
-    else
-      fail "statusLine command is empty"
+    # Check pre-session state
+    local has_config_before="no"
+    if verify_settings_has_statusline; then
+      has_config_before="yes"
     fi
 
-  elif [ "$has_statusline_after_session2" = "yes" ]; then
-    # Hook didn't fire in session 1, but did in session 2
-    pass "SessionStart hook wrote statusLine during 2nd session (not 1st)"
-    info "Timeline: install → session1 (no hook fire) → session2 (hook writes config) → session3 (bar shows)"
-    info "RESULT: 2 restarts needed (statusline appears on 3rd session)"
-    pass "Restart count: 2 (3 total sessions to see statusline)"
+    info "── Session $session_num (config before: $has_config_before) ──"
+    info "Starting real TUI session $session_num via pexpect (waiting 15s)..."
+    run_real_claude_session 15
+
+    # Check 1: Did run.sh get invoked? (= statusline RENDERED)
+    if [ -f "$marker_file" ]; then
+      info "Session $session_num: MARKER FILE FOUND → statusline was RENDERED"
+      if [ "$rendered_in_session" -eq 0 ]; then
+        rendered_in_session=$session_num
+      fi
+    else
+      info "Session $session_num: No marker file → statusline was NOT rendered"
+    fi
+
+    # Check 2: Did SessionStart hook write statusLine config?
+    if verify_settings_has_statusline; then
+      if [ "$config_written_in_session" -eq 0 ] && [ "$has_config_before" = "no" ]; then
+        config_written_in_session=$session_num
+        info "Session $session_num: statusLine config WRITTEN to settings.json (hook fired)"
+      fi
+    else
+      info "Session $session_num: No statusLine config in settings.json"
+    fi
+
+    # Early exit if we've seen rendering
+    if [ "$rendered_in_session" -gt 0 ]; then
+      info "Statusline rendered — no need for more sessions"
+      break
+    fi
+  done
+
+  # ── Step 4: Analyze results ──
+  info "=== Rendering Detection Analysis ==="
+  info "Config first written in session: ${config_written_in_session:-never}"
+  info "Statusline first rendered in session: ${rendered_in_session:-never}"
+
+  if [ "$rendered_in_session" -gt 0 ]; then
+    local restarts_needed=$((rendered_in_session - 1))
+    pass "Statusline first RENDERED in session $rendered_in_session"
+
+    if [ "$restarts_needed" -eq 0 ]; then
+      pass "Restart count: 0 (statusline renders on FIRST session after install)"
+      info "IDEAL: No restart needed — statusline appears immediately"
+    elif [ "$restarts_needed" -eq 1 ]; then
+      pass "Restart count: 1 (statusline renders on 2nd session)"
+      info "ACCEPTABLE: Config written by hook in session 1, rendered in session 2"
+      info "Timeline: install → session1 (hook writes config, no bar) → session2 (bar renders)"
+    else
+      fail "Restart count: $restarts_needed (statusline renders on session $rendered_in_session)"
+      info "BAD: Too many restarts needed before statusline appears"
+      info "This confirms the 2-restart bug is still present"
+    fi
+
+    # Cross-check: config should have been written before rendering
+    if [ "$config_written_in_session" -gt 0 ] && [ "$config_written_in_session" -lt "$rendered_in_session" ]; then
+      pass "Config was written (session $config_written_in_session) before rendering (session $rendered_in_session)"
+    elif [ "$config_written_in_session" -eq "$rendered_in_session" ]; then
+      info "Config written and rendered in same session (config may have existed before)"
+    fi
 
   else
-    # Neither session wrote statusLine
-    fail "SessionStart hook never fired in either real session"
+    fail "Statusline NEVER rendered in $max_sessions sessions"
+    info "Config written in session: ${config_written_in_session:-never}"
     info "settings.json: $(cat "$SETTINGS_FILE")"
-    info "Check: is plugin in installed_plugins.json?"
+    info "Check installed_plugins.json:"
     cat "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null || info "(file not found)"
   fi
 
+  # Verify the marker mechanism itself works (sanity check)
+  local run_sh
+  run_sh="$(get_run_sh_path)"
+  if [ -f "$run_sh" ] && grep -qF "MARKER_ACTIVE" "$run_sh"; then
+    pass "Marker run.sh is still in place (test integrity confirmed)"
+  else
+    fail "Marker run.sh was replaced during test (results may be unreliable)"
+  fi
+
   # ── Cleanup ──
-  info "Cleaning up real install..."
+  info "Cleaning up..."
+  restore_original_run_sh
+  rm -f "$marker_file"
   reset_clean_state_real
 }
 
