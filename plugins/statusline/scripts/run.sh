@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Wrapper to run statusline.js with node, handling nvm/fnm environments
 # where node isn't in PATH for non-interactive shells
+# stdin: JSON from Claude Code's statusLine system (passed through to node)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"
+
+# Bail if statusline.js is missing (e.g. cache was cleared)
+if [ ! -f "$STATUSLINE_JS" ]; then
+  exit 1
+fi
 
 # Find node: try PATH first, then load nvm/fnm if needed
 find_node() {
