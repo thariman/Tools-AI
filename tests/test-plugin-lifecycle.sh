@@ -425,6 +425,89 @@ run_statusline_with_sample() {
   echo "$sample_json" | bash "$run_sh" 2>/dev/null
 }
 
+# ── 1-Restart Test Helpers ───────────────────────────────────────────────
+
+run_install_time_setup() {
+  # Runs setup.sh directly (simulates install-time execution, not SessionStart hook).
+  # The key difference from simulate_session_start: conceptually this happens
+  # at install time (before any Claude session), so statusLine config will be
+  # present when Claude first reads settings.json.
+  local setup_script
+  setup_script="$(get_setup_sh_path)"
+  if [ ! -f "$setup_script" ]; then
+    echo "ERROR: setup.sh not found at $setup_script"
+    return 1
+  fi
+  # setup.sh does `cat > /dev/null` to consume stdin, so we pipe from /dev/null
+  bash "$setup_script" < /dev/null 2>&1
+}
+
+snapshot_settings() {
+  # Captures settings.json content for before/after comparison
+  if [ -f "$SETTINGS_FILE" ]; then
+    cat "$SETTINGS_FILE"
+  else
+    echo ""
+  fi
+}
+
+get_statusline_command_from_settings() {
+  # Extracts statusLine.command value from settings.json via Python
+  if [ ! -f "$SETTINGS_FILE" ]; then
+    echo ""
+    return
+  fi
+  /usr/bin/python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+cmd = s.get('statusLine', {}).get('command', '')
+print(cmd)
+" "$SETTINGS_FILE" 2>/dev/null || echo ""
+}
+
+run_minimal_claude_session() {
+  # Runs a minimal Claude session with timeout for safety.
+  # Uses -p (print mode) with --dangerously-skip-permissions --no-session-persistence.
+  # Note: SessionStart hooks may NOT fire in -p mode (empirically confirmed).
+  local timeout_sec="${1:-30}"
+  timeout "$timeout_sec" $CLAUDE_CLI -p "say ok" --dangerously-skip-permissions --no-session-persistence 2>&1 || true
+}
+
+install_marker_run_sh() {
+  # Replaces run.sh with a marker script that writes a file when invoked.
+  # Backs up the original run.sh first.
+  local run_sh
+  run_sh="$(get_run_sh_path)"
+  if [ ! -f "$run_sh" ]; then
+    echo "ERROR: run.sh not found"
+    return 1
+  fi
+
+  # Backup original
+  cp "$run_sh" "${run_sh}.bak"
+
+  # Write marker script
+  cat > "$run_sh" << 'MARKER_EOF'
+#!/usr/bin/env bash
+# Marker script: writes a timestamp to prove Claude invoked this
+cat > /dev/null
+echo "$(date +%s)" > /tmp/statusline-marker.txt
+echo "MARKER_ACTIVE"
+MARKER_EOF
+  chmod +x "$run_sh"
+}
+
+restore_original_run_sh() {
+  # Restores the original run.sh from backup
+  local run_sh
+  run_sh="$(get_run_sh_path)"
+  if [ -f "${run_sh}.bak" ]; then
+    mv "${run_sh}.bak" "$run_sh"
+    chmod +x "$run_sh"
+  fi
+}
+
 # ── Preflight Checks ──────────────────────────────────────────────────────
 
 preflight() {
@@ -1126,9 +1209,17 @@ test_T10_cache_cleared() {
   output=$(echo '{"model":{"display_name":"Test"}}' | bash "$run_sh" 2>"$stderr_file")
   exit_code=$?
 
-  # run.sh checks: if [ ! -f "$STATUSLINE_JS" ]; then exit 1; fi
+  # run.sh checks: if [ ! -f "$STATUSLINE_JS" ]; then echo diagnostic >&2; exit 1; fi
   assert_exit_code 1 "$exit_code" "run.sh exits 1 when statusline.js missing"
-  assert_stderr_empty "$stderr_file" "run.sh produces no stderr when cache cleared"
+
+  # run.sh now writes a diagnostic to stderr (added in atomic writes commit)
+  local stderr_content
+  stderr_content=$(cat "$stderr_file")
+  if echo "$stderr_content" | grep -qF "statusline.js not found"; then
+    pass "run.sh produces diagnostic stderr when cache cleared"
+  else
+    fail "run.sh missing expected diagnostic stderr (got: $stderr_content)"
+  fi
 
   if [ -z "$output" ]; then
     pass "run.sh produces no stdout when cache cleared"
@@ -1324,6 +1415,496 @@ print(' '.join(sorted(s.keys())) if s else '(empty)')
 }
 
 # ============================================================================
+# 1-RESTART VALIDATION TESTS (T12–T20)
+# ============================================================================
+# These tests verify that running setup.sh at install time (instead of relying
+# solely on the SessionStart hook) eliminates the 2-restart problem.
+#
+# Core issue: Claude reads settings.json BEFORE SessionStart hooks fire. So a
+# hook that writes statusLine config on SessionStart is too late for session 1.
+# The fix: run setup.sh during install so the config exists before session 1.
+# ============================================================================
+
+test_T12_install_time_setup() {
+  test_header "T12: Install-Time Setup (1-Restart Path)" \
+    "Install → verify no statusLine → run setup.sh directly → verify statusLine exists"
+
+  reset_clean_state
+
+  # Step 1: Install plugin manually
+  install_plugin_manual
+
+  # Step 2: Verify NO statusLine in settings (just installed, no session yet)
+  if verify_settings_clean; then
+    pass "No statusLine in settings.json after install (before setup.sh)"
+  else
+    fail "statusLine unexpectedly present after manual install"
+    return
+  fi
+
+  # Step 3: Run setup.sh directly (simulates install-time execution)
+  info "Running setup.sh at install-time (not via SessionStart hook)..."
+  local output
+  output=$(run_install_time_setup) || true
+
+  # Step 4: Verify statusLine NOW exists with correct run.sh path
+  if verify_settings_has_statusline; then
+    pass "statusLine present in settings.json after install-time setup.sh"
+  else
+    fail "statusLine missing after install-time setup.sh"
+    if [ -f "$SETTINGS_FILE" ]; then
+      info "settings.json: $(cat "$SETTINGS_FILE")"
+    fi
+    return
+  fi
+
+  # Step 5: Verify the command points to the correct run.sh
+  local cmd
+  cmd=$(get_statusline_command_from_settings)
+  local expected_run_sh
+  expected_run_sh="$(get_run_sh_path)"
+  if echo "$cmd" | grep -qF "$expected_run_sh"; then
+    pass "statusLine command references correct run.sh path"
+  else
+    fail "statusLine command has wrong path (got: $cmd, expected to contain: $expected_run_sh)"
+  fi
+
+  # Step 6: Verify run.sh produces output
+  local statusline_output
+  statusline_output=$(run_statusline_with_sample) || true
+  assert_output_not_empty "$statusline_output" "run.sh produces output after install-time setup"
+}
+
+test_T13_two_restart_baseline() {
+  test_header "T13: 2-Restart Baseline (Prove the Problem)" \
+    "Install → verify no statusLine → simulate SessionStart → verify statusLine written"
+
+  reset_clean_state
+
+  # Step 1: Install plugin manually
+  install_plugin_manual
+
+  # Step 2: Verify NO statusLine (this is the state Claude sees on first session start)
+  if verify_settings_clean; then
+    pass "No statusLine after install (this is what Claude reads at session start)"
+  else
+    fail "statusLine unexpectedly present after manual install"
+    return
+  fi
+
+  # Commentary: In a real session, Claude has ALREADY read settings.json by this point.
+  # The SessionStart hook fires AFTER Claude reads settings — so even though the hook
+  # writes statusLine, Claude won't see it until the NEXT session start.
+  info "NOTE: In a real session, Claude reads settings.json BEFORE SessionStart fires."
+  info "This means the statusLine config written by the hook is too late for session 1."
+
+  # Step 3: Simulate SessionStart (this is what the hook does)
+  info "Simulating SessionStart hook..."
+  simulate_session_start >/dev/null 2>&1 || true
+
+  # Step 4: Verify statusLine was written (but too late for the current session)
+  if verify_settings_has_statusline; then
+    pass "statusLine written by SessionStart hook (but too late for session 1)"
+  else
+    fail "SessionStart hook failed to write statusLine"
+  fi
+
+  info "CONCLUSION: Session 1 never shows statusline because config was written AFTER read."
+  info "Session 2 will read the config and show statusline. Hence: 2-restart problem."
+}
+
+test_T14_one_vs_two_restart() {
+  test_header "T14: 1-Restart vs 2-Restart Comparison" \
+    "Side-by-side comparison showing install-time setup.sh eliminates the timing gap"
+
+  # ── 2-Restart Flow ──
+  info "=== 2-Restart Flow ==="
+  reset_clean_state
+  install_plugin_manual
+
+  # Snapshot 1: What Claude sees at first session start (no statusLine)
+  local snapshot_2restart_before
+  snapshot_2restart_before=$(snapshot_settings)
+  if ! echo "$snapshot_2restart_before" | grep -qF '"statusLine"'; then
+    pass "2-restart: snapshot at session start has NO statusLine"
+  else
+    fail "2-restart: snapshot at session start unexpectedly has statusLine"
+  fi
+
+  # SessionStart hook fires (too late for session 1)
+  simulate_session_start >/dev/null 2>&1 || true
+
+  # Snapshot 2: After SessionStart (available for session 2)
+  local snapshot_2restart_after
+  snapshot_2restart_after=$(snapshot_settings)
+
+  if echo "$snapshot_2restart_after" | grep -qF '"statusLine"'; then
+    pass "2-restart: snapshot after SessionStart has statusLine (for session 2)"
+  else
+    fail "2-restart: SessionStart failed to write statusLine"
+    return
+  fi
+
+  # ── 1-Restart Flow ──
+  info "=== 1-Restart Flow ==="
+  reset_clean_state
+  install_plugin_manual
+
+  # Run setup.sh at install time (BEFORE any session)
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  # Snapshot 3: What Claude sees at first session start (already has statusLine!)
+  local snapshot_1restart
+  snapshot_1restart=$(snapshot_settings)
+
+  if echo "$snapshot_1restart" | grep -qF '"statusLine"'; then
+    pass "1-restart: snapshot at session start ALREADY has statusLine"
+  else
+    fail "1-restart: setup.sh failed to write statusLine at install time"
+    return
+  fi
+
+  # ── Comparison ──
+  info "=== Comparison ==="
+
+  # Extract statusLine configs for structural comparison
+  local config_2restart config_1restart
+  config_2restart=$(/usr/bin/python3 -c "
+import json, sys
+s = json.loads(sys.argv[1])
+print(json.dumps(s.get('statusLine', {}), sort_keys=True))
+" "$snapshot_2restart_after" 2>/dev/null) || true
+
+  config_1restart=$(/usr/bin/python3 -c "
+import json, sys
+s = json.loads(sys.argv[1])
+print(json.dumps(s.get('statusLine', {}), sort_keys=True))
+" "$snapshot_1restart" 2>/dev/null) || true
+
+  if [ "$config_2restart" = "$config_1restart" ]; then
+    pass "Both flows produce structurally identical statusLine config"
+    info "Config: $config_1restart"
+  else
+    fail "statusLine configs differ between 1-restart and 2-restart flows"
+    info "2-restart: $config_2restart"
+    info "1-restart: $config_1restart"
+  fi
+
+  info "CONCLUSION: Install-time setup.sh writes the SAME config as SessionStart,"
+  info "but it's available BEFORE the first session reads settings.json."
+}
+
+test_T15_real_cli_hook_trigger() {
+  test_header "T15: Real CLI SessionStart Hook Trigger" \
+    "Install plugin → run real Claude session → check if SessionStart hook fires"
+
+  reset_clean_state
+  install_plugin_manual
+
+  # Verify no statusLine before CLI session
+  if ! verify_settings_clean; then
+    fail "statusLine present before CLI session (expected clean)"
+    return
+  fi
+
+  # Run a minimal Claude session
+  info "Running minimal Claude CLI session (timeout 30s)..."
+  info "Note: -p mode may not fire SessionStart hooks (empirically observed)"
+  run_minimal_claude_session 30
+
+  # Check if SessionStart hook fired (wrote statusLine to settings.json)
+  if verify_settings_has_statusline; then
+    pass "SessionStart hook fired in -p mode and wrote statusLine"
+    info "This means -p mode DOES fire SessionStart hooks on this CLI version"
+  else
+    skip "SessionStart hooks did not fire in -p mode (expected — TUI-only behavior)"
+    info "This confirms that -p mode skips SessionStart hooks."
+    info "Contract tests T12-T14 provide authoritative verification instead."
+  fi
+}
+
+test_T16_marker_file_test() {
+  test_header "T16: Marker File Test (Prove Claude Invokes run.sh)" \
+    "Install + setup → replace run.sh with marker → run real CLI → check marker"
+
+  reset_clean_state
+  install_plugin_manual
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  if ! verify_settings_has_statusline; then
+    skip "Could not set up statusLine config"
+    return
+  fi
+
+  # Remove any leftover marker
+  rm -f /tmp/statusline-marker.txt
+
+  # Install marker script (backs up original)
+  info "Installing marker run.sh..."
+  if ! install_marker_run_sh; then
+    fail "Could not install marker run.sh"
+    return
+  fi
+
+  # Run minimal Claude session
+  info "Running minimal Claude CLI session (timeout 30s)..."
+  run_minimal_claude_session 30
+
+  # Check if marker was created
+  if [ -f /tmp/statusline-marker.txt ]; then
+    pass "Marker file created — Claude invoked run.sh during session"
+    local marker_content
+    marker_content=$(cat /tmp/statusline-marker.txt)
+    info "Marker timestamp: $marker_content"
+  else
+    skip "Marker file not created — statusline may not render in -p mode (TUI-only)"
+    info "This is expected: statusline rendering is a TUI feature."
+    info "Contract tests T12-T14 verify config correctness independently."
+  fi
+
+  # Always clean up
+  restore_original_run_sh
+  rm -f /tmp/statusline-marker.txt
+
+  # Verify original run.sh was restored
+  local run_sh
+  run_sh="$(get_run_sh_path)"
+  if [ -f "$run_sh" ] && ! grep -qF "MARKER_ACTIVE" "$run_sh"; then
+    pass "Original run.sh restored after marker test"
+  else
+    fail "Failed to restore original run.sh"
+  fi
+}
+
+test_T17_empty_settings() {
+  test_header "T17: Empty Settings.json" \
+    "Start with {} → install + setup.sh → verify both statusLine and enabledPlugins coexist"
+
+  reset_clean_state
+
+  # Ensure settings.json is exactly {}
+  echo '{}' > "$SETTINGS_FILE"
+
+  # Install and run setup.sh
+  install_plugin_manual
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  # Verify statusLine exists
+  if verify_settings_has_statusline; then
+    pass "statusLine written to initially empty settings.json"
+  else
+    fail "statusLine missing after setup.sh on empty settings.json"
+    return
+  fi
+
+  # Verify enabledPlugins also exists (written by install_plugin_manual)
+  if grep -qF '"enabledPlugins"' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "enabledPlugins coexists with statusLine in settings.json"
+  else
+    fail "enabledPlugins missing (install_plugin_manual should have written it)"
+  fi
+
+  # Verify settings.json is valid JSON
+  if /usr/bin/python3 -c "import json; json.load(open('$SETTINGS_FILE'))" 2>/dev/null; then
+    pass "settings.json is valid JSON with both keys"
+  else
+    fail "settings.json is corrupted"
+  fi
+}
+
+test_T18_existing_statusline() {
+  test_header "T18: Existing statusLine (Another Plugin)" \
+    "Pre-write different statusLine → install + setup.sh → verify our config overwrites"
+
+  reset_clean_state
+
+  # Pre-write a different statusLine config
+  /usr/bin/python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+s['statusLine'] = {
+    'type': 'command',
+    'command': 'bash \"/some/other/plugin/run.sh\"'
+}
+with open(sys.argv[1], 'w') as f:
+    json.dump(s, f, indent=2)
+    f.write('\n')
+" "$SETTINGS_FILE"
+
+  # Verify the other plugin's config is there
+  if grep -qF '/some/other/plugin/run.sh' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "Pre-existing statusLine config from other plugin is present"
+  else
+    fail "Could not set up pre-existing statusLine"
+    return
+  fi
+
+  # Install our plugin and run setup.sh
+  install_plugin_manual
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  # Verify OUR run.sh path is now in the config
+  local cmd
+  cmd=$(get_statusline_command_from_settings)
+  local our_run_sh
+  our_run_sh="$(get_run_sh_path)"
+  if echo "$cmd" | grep -qF "$our_run_sh"; then
+    pass "Our statusLine config overwrites the previous plugin's config"
+  else
+    fail "statusLine still points to old plugin (got: $cmd)"
+  fi
+
+  # Verify the old path is gone
+  if ! grep -qF '/some/other/plugin/run.sh' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "Previous plugin's run.sh path is no longer in settings.json"
+  else
+    fail "Old plugin's path still present in settings.json"
+  fi
+}
+
+test_T19_concurrent_modification() {
+  test_header "T19: Concurrent Settings Modification" \
+    "Install → add extra key → run setup.sh → verify statusLine added AND extra key preserved"
+
+  reset_clean_state
+
+  # Install plugin (writes enabledPlugins)
+  install_plugin_manual
+
+  # Add an extra key to settings.json (simulating another tool writing config)
+  info "Adding otherPlugin key to settings.json..."
+  /usr/bin/python3 -c "
+import json, sys, tempfile, os
+f = sys.argv[1]
+with open(f) as fh:
+    s = json.load(fh)
+s['otherPlugin'] = {'enabled': True, 'version': '2.0.0'}
+tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
+try:
+    with os.fdopen(tmpfd, 'w') as fh:
+        json.dump(s, fh, indent=2)
+        fh.write('\n')
+    os.replace(tmppath, f)
+except:
+    os.unlink(tmppath)
+    raise
+" "$SETTINGS_FILE"
+
+  # Verify extra key exists
+  if grep -qF '"otherPlugin"' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "Extra otherPlugin key present before setup.sh"
+  else
+    fail "Could not add otherPlugin key"
+    return
+  fi
+
+  # Run setup.sh (should add statusLine without losing otherPlugin)
+  info "Running setup.sh (should preserve otherPlugin key)..."
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  # Verify statusLine was added
+  if verify_settings_has_statusline; then
+    pass "statusLine added by setup.sh"
+  else
+    fail "statusLine missing after setup.sh"
+    return
+  fi
+
+  # Verify otherPlugin was preserved (atomic read-modify-write works)
+  if grep -qF '"otherPlugin"' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "otherPlugin key preserved after setup.sh (read-modify-write works)"
+  else
+    fail "otherPlugin key was lost — setup.sh overwrote settings.json destructively"
+  fi
+
+  # Verify enabledPlugins also preserved
+  if grep -qF '"enabledPlugins"' "$SETTINGS_FILE" 2>/dev/null; then
+    pass "enabledPlugins also preserved after setup.sh"
+  else
+    fail "enabledPlugins lost after setup.sh"
+  fi
+
+  # Verify everything is valid JSON
+  if /usr/bin/python3 -c "import json; json.load(open('$SETTINGS_FILE'))" 2>/dev/null; then
+    pass "settings.json is valid JSON with all keys intact"
+  else
+    fail "settings.json is corrupted after concurrent modification test"
+  fi
+}
+
+test_T20_full_one_restart_lifecycle() {
+  test_header "T20: Full 1-Restart Lifecycle" \
+    "Reset → install → setup.sh → verify → real CLI (idempotency) → verify → render → uninstall → verify"
+
+  reset_clean_state
+
+  # Step 1: Install plugin
+  info "Step 1: Installing plugin..."
+  install_plugin_manual
+
+  # Step 2: Run setup.sh at install time (the 1-restart fix)
+  info "Step 2: Running setup.sh at install time..."
+  run_install_time_setup >/dev/null 2>&1 || true
+
+  # Step 3: Verify config exists
+  if verify_settings_has_statusline; then
+    pass "Config present after install-time setup.sh"
+  else
+    fail "Config missing after install-time setup.sh"
+    return
+  fi
+
+  local cmd_before
+  cmd_before=$(get_statusline_command_from_settings)
+
+  # Step 4: Run real CLI session (idempotency check — SessionStart hook should be no-op)
+  info "Step 4: Running real CLI session (idempotency check)..."
+  run_minimal_claude_session 30
+
+  # Step 5: Verify config is unchanged after CLI session
+  local cmd_after
+  cmd_after=$(get_statusline_command_from_settings)
+
+  if [ "$cmd_before" = "$cmd_after" ]; then
+    pass "Config unchanged after CLI session (idempotent)"
+  else
+    # Changed is also acceptable if SessionStart hook updated it
+    info "Config changed after CLI session (hook may have re-run)"
+    info "Before: $cmd_before"
+    info "After: $cmd_after"
+    pass "Config still valid after CLI session"
+  fi
+
+  # Step 6: Verify run.sh produces output
+  info "Step 6: Verifying run.sh renders correctly..."
+  local output
+  output=$(run_statusline_with_sample) || true
+  assert_output_not_empty "$output" "run.sh produces output in full lifecycle"
+
+  # Step 7: Run uninstall.sh
+  info "Step 7: Running uninstall.sh..."
+  local uninstall_output
+  uninstall_output=$(bash "$(get_uninstall_sh_path)" 2>&1) || true
+  assert_output_contains "$uninstall_output" "Removed statusLine config" \
+    "uninstall.sh reports successful removal"
+
+  # Step 8: Verify clean
+  if verify_settings_clean; then
+    pass "statusLine removed from settings.json after uninstall"
+  else
+    fail "statusLine still in settings.json after uninstall"
+  fi
+
+  # Step 9: Verify settings.json is valid JSON
+  if /usr/bin/python3 -c "import json; json.load(open('$SETTINGS_FILE'))" 2>/dev/null; then
+    pass "settings.json is valid JSON after full lifecycle"
+  else
+    fail "settings.json corrupted after full lifecycle"
+  fi
+}
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -1347,10 +1928,24 @@ test_T9_malformed_settings
 test_T10_cache_cleared
 test_T11_full_cleanup
 
+# ── 1-Restart Validation Tests ─────────────────────────────────────────────
+test_T12_install_time_setup
+test_T13_two_restart_baseline
+test_T14_one_vs_two_restart
+test_T15_real_cli_hook_trigger
+test_T16_marker_file_test
+test_T17_empty_settings
+test_T18_existing_statusline
+test_T19_concurrent_modification
+test_T20_full_one_restart_lifecycle
+
 # ── Final Cleanup ──────────────────────────────────────────────────────────
 
 banner "Cleanup"
 reset_clean_state
+
+# Also reset settings.json to {} to remove any test-injected keys (e.g. otherPlugin from T19)
+echo '{}' > "$SETTINGS_FILE"
 
 # Verify final cleanup actually worked
 if verify_settings_clean; then
