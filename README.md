@@ -53,7 +53,10 @@ claude plugin list
 
 ## Uninstalling
 
+Run the cleanup script first to remove the statusline config from `settings.json`, then uninstall the plugin:
+
 ```bash
+bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
 claude plugin uninstall statusline
 ```
 
