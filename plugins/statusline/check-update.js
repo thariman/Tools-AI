@@ -30,20 +30,53 @@ function writeCache(data) {
 }
 
 function getCurrentVersion() {
-  const commands = [
-    'claude --version',
-    'claude-code --version',
-  ];
+  // 1. Try claude in PATH (works when check-update.sh sets up PATH correctly)
+  const commands = ['claude --version', 'claude-code --version'];
   for (const cmd of commands) {
     try {
       const output = execSync(cmd, {
         encoding: 'utf8', timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
       const match = output.match(/(\d+\.\d+\.\d+)/);
       if (match) return match[1];
     } catch {}
   }
+
+  // 2. Try claude binary at common locations and relative to node
+  const homedir = os.homedir();
+  const candidatePaths = [
+    path.join(path.dirname(process.execPath), 'claude'),  // same dir as node
+    path.join(homedir, '.npm-global', 'bin', 'claude'),
+    path.join(homedir, '.local', 'share', 'nodeenv', 'bin', 'claude'),
+    path.join(homedir, '.volta', 'bin', 'claude'),
+    '/usr/local/bin/claude',
+    '/usr/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ];
+  for (const p of candidatePaths) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const output = execSync(`"${p}" --version`, {
+        encoding: 'utf8', timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      const match = output.match(/(\d+\.\d+\.\d+)/);
+      if (match) return match[1];
+    } catch {}
+  }
+
+  // 3. Try reading version from npm global package.json
+  try {
+    const globalRoot = execSync('npm root -g', {
+      encoding: 'utf8', timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const pkgPath = path.join(globalRoot, '@anthropic-ai', 'claude-code', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (pkg.version) return pkg.version;
+  } catch {}
+
   return null;
 }
 

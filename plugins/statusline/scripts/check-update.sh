@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Wrapper to run check-update.js with node, handling nvm/fnm environments.
 # Runs from SessionStart hook — consumes stdin, then launches the checker.
+# IMPORTANT: Node discovery runs in the main shell (not a subshell) so that
+# PATH modifications (nvm, fnm, volta) are inherited by the node process.
+# This lets check-update.js find both `node` and `claude` in PATH.
 
 # Consume stdin (hook sends JSON payload we don't need)
 cat > /dev/null
@@ -13,40 +16,62 @@ if [ ! -f "$CHECK_UPDATE_JS" ]; then
   exit 0
 fi
 
-# Find node: try PATH first, then load nvm/fnm if needed
-find_node() {
-  command -v node 2>/dev/null && return
-  # Try nvm
+# Find node in the main shell so PATH changes persist for the child process
+NODE_BIN=""
+
+# Try PATH first
+NODE_BIN="$(command -v node 2>/dev/null)"
+
+# Try nvm
+if [ -z "$NODE_BIN" ]; then
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   if [ -s "$NVM_DIR/nvm.sh" ]; then
     . "$NVM_DIR/nvm.sh" 2>/dev/null
-    command -v node 2>/dev/null && return
+    NODE_BIN="$(command -v node 2>/dev/null)"
   fi
-  # Try fnm
+fi
+
+# Try fnm
+if [ -z "$NODE_BIN" ]; then
   if command -v fnm &>/dev/null; then
     eval "$(fnm env 2>/dev/null)"
-    command -v node 2>/dev/null && return
+    NODE_BIN="$(command -v node 2>/dev/null)"
   fi
-  # Try volta
+fi
+
+# Try volta
+if [ -z "$NODE_BIN" ]; then
   if [ -d "$HOME/.volta" ]; then
     export VOLTA_HOME="$HOME/.volta"
-    PATH="$VOLTA_HOME/bin:$PATH"
-    command -v node 2>/dev/null && return
+    export PATH="$VOLTA_HOME/bin:$PATH"
+    NODE_BIN="$(command -v node 2>/dev/null)"
   fi
-  # Try nodeenv (used by Claude Code installer)
-  for p in "$HOME/.local/share/nodeenv/bin/node"; do
-    [ -x "$p" ] && echo "$p" && return
-  done
-  # Try common locations
-  for p in /usr/local/bin/node /usr/bin/node /opt/homebrew/bin/node; do
-    [ -x "$p" ] && echo "$p" && return
-  done
-}
+fi
 
-NODE_BIN="$(find_node)"
+# Try nodeenv (used by Claude Code installer)
+if [ -z "$NODE_BIN" ]; then
+  if [ -x "$HOME/.local/share/nodeenv/bin/node" ]; then
+    NODE_BIN="$HOME/.local/share/nodeenv/bin/node"
+    export PATH="$HOME/.local/share/nodeenv/bin:$PATH"
+  fi
+fi
+
+# Try common locations
+if [ -z "$NODE_BIN" ]; then
+  for p in /usr/local/bin/node /usr/bin/node /opt/homebrew/bin/node; do
+    if [ -x "$p" ]; then
+      NODE_BIN="$p"
+      break
+    fi
+  done
+fi
+
 if [ -z "$NODE_BIN" ]; then
   # No node — skip silently
   exit 0
 fi
+
+# Add node's directory to PATH so co-installed binaries (claude) are findable
+export PATH="$(dirname "$NODE_BIN"):$PATH"
 
 "$NODE_BIN" "$CHECK_UPDATE_JS" < /dev/null
