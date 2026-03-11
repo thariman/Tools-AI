@@ -20,15 +20,20 @@ mkdir -p "$PERSISTENT_DIR"
 
 # Copy files to persistent location (always update to get latest version)
 cp "$PLUGIN_DIR/statusline.js" "$PERSISTENT_DIR/statusline.js"
+cp "$PLUGIN_DIR/statusline.py" "$PERSISTENT_DIR/statusline.py" 2>/dev/null || true
 cp "$PLUGIN_DIR/check-update.js" "$PERSISTENT_DIR/check-update.js" 2>/dev/null || true
+cp "$PLUGIN_DIR/check-update.py" "$PERSISTENT_DIR/check-update.py" 2>/dev/null || true
 cp "$SCRIPT_DIR/run.sh" "$PERSISTENT_DIR/run.sh"
 cp "$SCRIPT_DIR/check-update.sh" "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 chmod +x "$PERSISTENT_DIR/run.sh"
 chmod +x "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 
-# Patch the persistent run.sh so it finds statusline.js in the same directory
-# (original looks in parent dir since repo layout is scripts/run.sh + ../statusline.js)
-sed -i 's|STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"|STATUSLINE_JS="$SCRIPT_DIR/statusline.js"|' "$PERSISTENT_DIR/run.sh"
+# Patch the persistent run.sh and check-update.sh so they find files in the same
+# directory (originals look in parent dir since repo layout is scripts/*.sh + ../*.js)
+sed -i 's|"$(dirname "$SCRIPT_DIR")/statusline.js"|"$SCRIPT_DIR/statusline.js"|' "$PERSISTENT_DIR/run.sh"
+sed -i 's|"$(dirname "$SCRIPT_DIR")/statusline.py"|"$SCRIPT_DIR/statusline.py"|' "$PERSISTENT_DIR/run.sh"
+sed -i 's|"$(dirname "$SCRIPT_DIR")/check-update.js"|"$SCRIPT_DIR/check-update.js"|' "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
+sed -i 's|"$(dirname "$SCRIPT_DIR")/check-update.py"|"$SCRIPT_DIR/check-update.py"|' "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 
 # Ensure settings.json exists
 if [ ! -f "$SETTINGS_FILE" ]; then

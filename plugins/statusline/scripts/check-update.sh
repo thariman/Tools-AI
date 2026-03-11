@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
-# Wrapper to run check-update.js with node, handling nvm/fnm environments.
+# Wrapper to run update checker with node (preferred) or python3 (fallback).
 # Runs from SessionStart hook — consumes stdin, then launches the checker.
 # IMPORTANT: Node discovery runs in the main shell (not a subshell) so that
-# PATH modifications (nvm, fnm, volta) are inherited by the node process.
-# This lets check-update.js find both `node` and `claude` in PATH.
+# PATH modifications (nvm, fnm, volta) are inherited by the child process.
 
 # Consume stdin (hook sends JSON payload we don't need)
 cat > /dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHECK_UPDATE_JS="$(dirname "$SCRIPT_DIR")/check-update.js"
-
-# Bail if check-update.js is missing
-if [ ! -f "$CHECK_UPDATE_JS" ]; then
-  exit 0
-fi
+CHECK_UPDATE_PY="$(dirname "$SCRIPT_DIR")/check-update.py"
 
 # Find node in the main shell so PATH changes persist for the child process
 NODE_BIN=""
@@ -66,12 +61,26 @@ if [ -z "$NODE_BIN" ]; then
   done
 fi
 
-if [ -z "$NODE_BIN" ]; then
-  # No node — skip silently
-  exit 0
+# Prefer node
+if [ -n "$NODE_BIN" ] && [ -f "$CHECK_UPDATE_JS" ]; then
+  export PATH="$(dirname "$NODE_BIN"):$PATH"
+  "$NODE_BIN" "$CHECK_UPDATE_JS" < /dev/null
+  exit $?
 fi
 
-# Add node's directory to PATH so co-installed binaries (claude) are findable
-export PATH="$(dirname "$NODE_BIN"):$PATH"
+# Fall back to python3
+PYTHON_BIN=""
+for p in python3 /usr/bin/python3 /usr/local/bin/python3; do
+  if command -v "$p" &>/dev/null; then
+    PYTHON_BIN="$p"
+    break
+  fi
+done
 
-"$NODE_BIN" "$CHECK_UPDATE_JS" < /dev/null
+if [ -n "$PYTHON_BIN" ] && [ -f "$CHECK_UPDATE_PY" ]; then
+  "$PYTHON_BIN" "$CHECK_UPDATE_PY" < /dev/null
+  exit $?
+fi
+
+# No runtime available — skip silently
+exit 0

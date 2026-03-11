@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
-# Wrapper to run statusline.js with node, handling nvm/fnm environments
-# where node isn't in PATH for non-interactive shells
-# stdin: JSON from Claude Code's statusLine system (passed through to node)
+# Wrapper to run statusline with node (preferred) or python3 (fallback).
+# Handles nvm/fnm environments where node isn't in PATH for non-interactive shells.
+# stdin: JSON from Claude Code's statusLine system (passed through to the renderer)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"
-
-# Bail if statusline.js is missing (e.g. cache was cleared)
-if [ ! -f "$STATUSLINE_JS" ]; then
-  echo "statusline: statusline.js not found (plugin cache may have been cleared)" >&2
-  exit 1
-fi
+STATUSLINE_PY="$(dirname "$SCRIPT_DIR")/statusline.py"
 
 # Find node: try PATH first, then load nvm/fnm if needed
 find_node() {
@@ -42,10 +37,23 @@ find_node() {
   done
 }
 
+# Prefer node (faster startup)
 NODE_BIN="$(find_node)"
-if [ -z "$NODE_BIN" ]; then
-  echo "statusline: node not found (tried PATH, nvm, fnm, volta, nodeenv, system paths)" >&2
-  exit 1
+if [ -n "$NODE_BIN" ] && [ -f "$STATUSLINE_JS" ]; then
+  exec "$NODE_BIN" "$STATUSLINE_JS"
 fi
 
-exec "$NODE_BIN" "$STATUSLINE_JS"
+# Fall back to python3
+find_python() {
+  for p in python3 /usr/bin/python3 /usr/local/bin/python3; do
+    command -v "$p" &>/dev/null && echo "$p" && return
+  done
+}
+
+PYTHON_BIN="$(find_python)"
+if [ -n "$PYTHON_BIN" ] && [ -f "$STATUSLINE_PY" ]; then
+  exec "$PYTHON_BIN" "$STATUSLINE_PY"
+fi
+
+echo "statusline: neither node nor python3 found" >&2
+exit 1
