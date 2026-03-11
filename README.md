@@ -13,12 +13,15 @@ A rich status line for Claude Code that displays at-a-glance session info:
 - **Directory** — current working directory
 - **Git branch & status** — branch name with clean (✔) or dirty (●) indicator
 - **Context window usage** — 10-segment progress bar with color-coded thresholds
+- **Update checker** — notifies when a new Claude Code version is available
 
 ```
-Opus 4.6 │ Fixing auth bug │ my-project │ main ✔ █████░░░░░ 50%
+Opus 4.6 │ Fixing auth bug │ my-project │ main ✔ █████░░░░░ 50% │ ⬆ v2.2.0
 ```
 
 Context window colors shift from green → yellow → orange → red as usage increases, with a skull (💀) warning above 80%.
+
+The update checker queries the npm registry on session start (with a 4-hour cooldown) and compares against your running version. When a new version is found, the `⬆ v{version}` indicator appears in the status bar and a full notification with GitHub release notes is displayed at session start.
 
 ## Installation
 
@@ -69,16 +72,24 @@ Plugin Install
   └─ adds to enabledPlugins, caches plugin files
 
 First Session Start
-  └─ SessionStart hook fires → setup.sh runs (~500ms)
-       ├─ copies run.sh + statusline.js to ~/.claude/statusline/ (persistent)
-       └─ python3 writes statusLine config to ~/.claude/settings.json
+  └─ SessionStart hook fires
+       ├─ setup.sh runs (~500ms)
+       │    ├─ copies run.sh + statusline.js + check-update files to ~/.claude/statusline/
+       │    └─ python3 writes statusLine config to ~/.claude/settings.json
+       └─ check-update.sh runs
+            └─ node check-update.js
+                 ├─ claude --version → current version
+                 ├─ npm registry → latest version
+                 ├─ GitHub releases → release notes (if update available)
+                 └─ writes ~/.claude/statusline/update-cache.json
 
 First User Interaction (same session)
   └─ UserPromptSubmit hook fires → setup.sh runs (idempotent, ~7ms)
   └─ Claude auto-reloads settings.json
        └─ reads statusLine config → runs bash ~/.claude/statusline/run.sh
             └─ run.sh finds node → exec node statusline.js
-                 └─ reads JSON from stdin → renders status bar
+                 ├─ reads JSON from stdin → renders status bar
+                 └─ reads update-cache.json → shows ⬆ indicator if update available
 ```
 
 The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, or if the persistent files are deleted, the next session start or prompt will restore them automatically.
@@ -94,6 +105,9 @@ The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mec
 | Persistent files deleted | Self-heals on next session start (re-copies from cache) |
 | Config manually deleted | Self-heals on next session start |
 | Existing manual statusLine | Overwritten by plugin config |
+| npm registry unreachable | Update check skipped silently, status bar still renders |
+| GitHub API unavailable | Update shown without release notes |
+| `claude --version` fails | Update check skipped, cached result used if available |
 
 ## Compatibility
 
@@ -120,8 +134,10 @@ plugins/<name>/
 ├── scripts/
 │   ├── setup.sh           # Auto-configuration + persistent file copy
 │   ├── run.sh             # Runtime wrapper (node discovery)
+│   ├── check-update.sh    # Update checker wrapper (node discovery)
 │   └── uninstall.sh       # Pre-uninstall cleanup (removes persistent files)
-└── statusline.js          # Status bar renderer (Node.js)
+├── statusline.js          # Status bar renderer (Node.js)
+└── check-update.js        # Version checker + release notes fetcher (Node.js)
 ```
 
 ## License

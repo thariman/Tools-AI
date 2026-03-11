@@ -1,5 +1,5 @@
 {
-  "description": "Status line setup hook - configures statusLine in settings.json on session start and on first prompt",
+  "description": "Status line setup hook - configures statusLine in settings.json on session start and on first prompt. Also checks for Claude Code updates.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,15 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/check-update.sh",
             "timeout": 30
           }
         ]

@@ -20,8 +20,11 @@ mkdir -p "$PERSISTENT_DIR"
 
 # Copy files to persistent location (always update to get latest version)
 cp "$PLUGIN_DIR/statusline.js" "$PERSISTENT_DIR/statusline.js"
+cp "$PLUGIN_DIR/check-update.js" "$PERSISTENT_DIR/check-update.js" 2>/dev/null || true
 cp "$SCRIPT_DIR/run.sh" "$PERSISTENT_DIR/run.sh"
+cp "$SCRIPT_DIR/check-update.sh" "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 chmod +x "$PERSISTENT_DIR/run.sh"
+chmod +x "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 
 # Patch the persistent run.sh so it finds statusline.js in the same directory
 # (original looks in parent dir since repo layout is scripts/run.sh + ../statusline.js)

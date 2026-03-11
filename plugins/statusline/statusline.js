@@ -59,6 +59,16 @@ process.stdin.on('end', () => {
       }
     }
 
+    // Version update indicator
+    let update = '';
+    try {
+      const cacheFile = path.join(homeDir, '.claude', 'statusline', 'update-cache.json');
+      const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      if (cache.has_update && cache.latest_version) {
+        update = ` │ \x1b[35m⬆ v${cache.latest_version}\x1b[0m`;
+      }
+    } catch (e) {}
+
     // Git status
     let git = '';
     try {
@@ -74,9 +84,9 @@ process.stdin.on('end', () => {
     // Output
     const dirname = path.basename(dir);
     if (task) {
-      process.stdout.write(`\x1b[2m${model}\x1b[0m │ \x1b[1m${task}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${git}${ctx}`);
+      process.stdout.write(`\x1b[2m${model}\x1b[0m │ \x1b[1m${task}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${git}${ctx}${update}`);
     } else {
-      process.stdout.write(`\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${git}${ctx}`);
+      process.stdout.write(`\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${git}${ctx}${update}`);
     }
   } catch (e) {
     // Silent fail - don't break statusline on parse errors

@@ -5,7 +5,7 @@
 SETTINGS_FILE="$HOME/.claude/settings.json"
 PERSISTENT_DIR="$HOME/.claude/statusline"
 
-# Clean up persistent statusline files
+# Clean up persistent statusline files (includes update-cache.json)
 if [ -d "$PERSISTENT_DIR" ]; then
   rm -rf "$PERSISTENT_DIR"
   echo "Removed persistent statusline files from $PERSISTENT_DIR"
