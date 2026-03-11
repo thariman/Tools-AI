@@ -1,4 +1,4 @@
-# Skills-AI
+# Tools-AI
 
 A Claude Code plugin marketplace with productivity-focused plugins.
 
@@ -27,7 +27,7 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
 **1. Add the marketplace:**
 
 ```
-/plugin marketplace add thariman/Skills-AI
+/plugin marketplace add thariman/Tools-AI
 ```
 
 **2. Install the plugin:**
@@ -38,11 +38,11 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
 
 **3. Start using Claude Code** — the statusline is automatically configured on the first session start via a `SessionStart` hook and appears after your first interaction (no restart needed).
 
-> **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which writes the `statusLine` config to `~/.claude/settings.json`. Claude Code auto-reloads settings after each interaction, so the status bar appears as soon as you send your first message. A `UserPromptSubmit` hook also runs `setup.sh` as a safety net, ensuring the config is written before any interaction triggers the reload.
+> **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which copies the statusline files to a persistent location (`~/.claude/statusline/`) and writes the `statusLine` config to `~/.claude/settings.json`. This ensures the status line survives plugin cache clears and Claude Code updates. Claude Code auto-reloads settings after each interaction, so the status bar appears as soon as you send your first message. A `UserPromptSubmit` hook also runs `setup.sh` as a safety net, ensuring the config is written before any interaction triggers the reload.
 
 ## Uninstalling
 
-**1. Remove the statusLine config:**
+**1. Remove the statusLine config and persistent files:**
 
 ```bash
 bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
@@ -54,7 +54,7 @@ bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
 /plugin uninstall statusline@skills-ai
 ```
 
-> **Important:** Run `uninstall.sh` first. The plugin system doesn't have a lifecycle hook for uninstall, so if you skip step 1, the `statusLine` config will remain orphaned in `settings.json` (it won't cause errors, but you'll need to manually remove the `statusLine` key).
+> **Important:** Run `uninstall.sh` first. The plugin system doesn't have a lifecycle hook for uninstall, so if you skip step 1, the `statusLine` config will remain orphaned in `settings.json` (it won't cause errors, but you'll need to manually remove the `statusLine` key and `~/.claude/statusline/` directory).
 
 To remove the marketplace source entirely:
 
@@ -70,17 +70,18 @@ Plugin Install
 
 First Session Start
   └─ SessionStart hook fires → setup.sh runs (~500ms)
+       ├─ copies run.sh + statusline.js to ~/.claude/statusline/ (persistent)
        └─ python3 writes statusLine config to ~/.claude/settings.json
 
 First User Interaction (same session)
   └─ UserPromptSubmit hook fires → setup.sh runs (idempotent, ~7ms)
   └─ Claude auto-reloads settings.json
-       └─ reads statusLine config → runs bash run.sh
+       └─ reads statusLine config → runs bash ~/.claude/statusline/run.sh
             └─ run.sh finds node → exec node statusline.js
                  └─ reads JSON from stdin → renders status bar
 ```
 
-The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, the next session start or prompt will re-add it automatically.
+The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mechanism**: if the `statusLine` config is accidentally removed from `settings.json`, or if the persistent files are deleted, the next session start or prompt will restore them automatically.
 
 ## Edge Cases
 
@@ -89,7 +90,8 @@ The `SessionStart` and `UserPromptSubmit` hooks also act as a **self-healing mec
 | `python3` not available | `setup.sh` fails with clear error message |
 | `settings.json` missing | Created from scratch with valid JSON |
 | `settings.json` malformed | `setup.sh` fails gracefully, doesn't corrupt further |
-| Plugin cache cleared | `run.sh` exits silently (no crash) |
+| Plugin cache cleared | Status line keeps working (files persisted to `~/.claude/statusline/`) |
+| Persistent files deleted | Self-heals on next session start (re-copies from cache) |
 | Config manually deleted | Self-heals on next session start |
 | Existing manual statusLine | Overwritten by plugin config |
 
@@ -116,9 +118,9 @@ plugins/<name>/
 ├── hooks/
 │   └── hooks.json         # Hook event registrations (SessionStart)
 ├── scripts/
-│   ├── setup.sh           # Auto-configuration on session start
+│   ├── setup.sh           # Auto-configuration + persistent file copy
 │   ├── run.sh             # Runtime wrapper (node discovery)
-│   └── uninstall.sh       # Pre-uninstall cleanup
+│   └── uninstall.sh       # Pre-uninstall cleanup (removes persistent files)
 └── statusline.js          # Status bar renderer (Node.js)
 ```
 
