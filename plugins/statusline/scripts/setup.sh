@@ -28,12 +28,11 @@ cp "$SCRIPT_DIR/check-update.sh" "$PERSISTENT_DIR/check-update.sh" 2>/dev/null |
 chmod +x "$PERSISTENT_DIR/run.sh"
 chmod +x "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 
-# Patch the persistent run.sh and check-update.sh so they find files in the same
-# directory (originals look in parent dir since repo layout is scripts/*.sh + ../*.js)
-sed -i 's|"$(dirname "$SCRIPT_DIR")/statusline.js"|"$SCRIPT_DIR/statusline.js"|' "$PERSISTENT_DIR/run.sh"
-sed -i 's|"$(dirname "$SCRIPT_DIR")/statusline.py"|"$SCRIPT_DIR/statusline.py"|' "$PERSISTENT_DIR/run.sh"
-sed -i 's|"$(dirname "$SCRIPT_DIR")/check-update.js"|"$SCRIPT_DIR/check-update.js"|' "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
-sed -i 's|"$(dirname "$SCRIPT_DIR")/check-update.py"|"$SCRIPT_DIR/check-update.py"|' "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
+# Patch persistent scripts: replace $(dirname "$SCRIPT_DIR")/ with $SCRIPT_DIR/
+# (originals look in parent dir since repo layout is scripts/*.sh + ../*.{js,py},
+#  but the persistent layout is flat — all files in the same directory)
+sed -i 's|$(dirname "$SCRIPT_DIR")/|$SCRIPT_DIR/|g' "$PERSISTENT_DIR/run.sh"
+sed -i 's|$(dirname "$SCRIPT_DIR")/|$SCRIPT_DIR/|g' "$PERSISTENT_DIR/check-update.sh" 2>/dev/null || true
 
 # Ensure settings.json exists
 if [ ! -f "$SETTINGS_FILE" ]; then
