@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # Setup script for statusline plugin
-# Configures settings.json with the statusLine command
-# Runs on SessionStart — skips if already configured
-# Requires python3 for safe JSON manipulation
+# Copies statusline files to a persistent location (~/.claude/statusline/)
+# so they survive plugin cache clears and Claude Code updates.
+# Configures settings.json to point to the persistent copy.
+# Runs on SessionStart — skips if already configured and up-to-date.
+# Requires python3 for safe JSON manipulation.
 
 # Consume stdin (SessionStart hook sends JSON on stdin; we don't need it)
 cat > /dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUN_SH="$SCRIPT_DIR/run.sh"
+PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+PERSISTENT_DIR="$HOME/.claude/statusline"
+PERSISTENT_RUN_SH="$PERSISTENT_DIR/run.sh"
 SETTINGS_FILE="$HOME/.claude/settings.json"
+
+# Ensure persistent directory exists
+mkdir -p "$PERSISTENT_DIR"
+
+# Copy files to persistent location (always update to get latest version)
+cp "$PLUGIN_DIR/statusline.js" "$PERSISTENT_DIR/statusline.js"
+cp "$SCRIPT_DIR/run.sh" "$PERSISTENT_DIR/run.sh"
+chmod +x "$PERSISTENT_DIR/run.sh"
+
+# Patch the persistent run.sh so it finds statusline.js in the same directory
+# (original looks in parent dir since repo layout is scripts/run.sh + ../statusline.js)
+sed -i 's|STATUSLINE_JS="$(dirname "$SCRIPT_DIR")/statusline.js"|STATUSLINE_JS="$SCRIPT_DIR/statusline.js"|' "$PERSISTENT_DIR/run.sh"
 
 # Ensure settings.json exists
 if [ ! -f "$SETTINGS_FILE" ]; then
@@ -17,10 +33,8 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   echo '{}' > "$SETTINGS_FILE"
 fi
 
-# Skip if already configured with THIS version's run.sh path (exact match).
-# On plugin version upgrade, the new path won't match the old → falls through
-# to the python update below, which overwrites with the correct new path.
-if grep -qF "$RUN_SH" "$SETTINGS_FILE" 2>/dev/null; then
+# Skip JSON update if already pointing to the persistent path
+if grep -qF "$PERSISTENT_RUN_SH" "$SETTINGS_FILE" 2>/dev/null; then
   exit 0
 fi
 
@@ -62,7 +76,7 @@ try:
 except:
     os.unlink(tmppath)
     raise
-" "$SETTINGS_FILE" "$RUN_SH" 2>&1; then
+" "$SETTINGS_FILE" "$PERSISTENT_RUN_SH" 2>&1; then
   echo "statusline setup: failed to update settings.json" >&2
   exit 1
 fi

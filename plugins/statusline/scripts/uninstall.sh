@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# Removes the statusLine config from settings.json
+# Removes the statusLine config from settings.json and cleans up persistent files
 # Run this BEFORE "/plugin uninstall statusline@skills-ai"
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
+PERSISTENT_DIR="$HOME/.claude/statusline"
+
+# Clean up persistent statusline files
+if [ -d "$PERSISTENT_DIR" ]; then
+  rm -rf "$PERSISTENT_DIR"
+  echo "Removed persistent statusline files from $PERSISTENT_DIR"
+fi
 
 if [ ! -f "$SETTINGS_FILE" ]; then
   echo "No settings.json found — nothing to clean up"
