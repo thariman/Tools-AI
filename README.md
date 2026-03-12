@@ -23,22 +23,33 @@ Context window colors shift from green → yellow → orange → red as usage in
 
 The update checker queries the npm registry on session start (with a 4-hour cooldown) and compares against your running version. When a new version is found, the `⬆ v{version}` indicator appears in the status bar and a full notification with GitHub release notes is displayed at session start.
 
-### Export Claude-Mem Prompts
+### Export Claude-Mem Memories
 
-A standalone script to export all user prompts from a [claude-mem](https://github.com/thedotmack/claude-mem) SQLite database to JSON.
+A standalone script to export all memories from [claude-mem](https://github.com/thedotmack/claude-mem) to JSON. Supports two modes:
+
+**HTTP API mode** (default) — queries a running claude-mem server:
+
+```bash
+# Default: exports to ./all-memories.json from localhost:37777
+./export-claude-mem-prompts.sh
+
+# Custom output file and port
+./export-claude-mem-prompts.sh my-memories.json 38888
+```
+
+Requires `curl` and a running claude-mem server.
+
+**SQLite mode** — reads the database directly:
 
 ```bash
 # Default: exports to ./claude-mem-prompts.json from ~/.claude-mem/claude-mem.db
-./export-claude-mem-prompts.sh
-
-# Custom output file
-./export-claude-mem-prompts.sh my-prompts.json
+./export-claude-mem-prompts.sh --db
 
 # Custom output file and db path
-./export-claude-mem-prompts.sh my-prompts.json /path/to/claude-mem.db
+./export-claude-mem-prompts.sh --db my-prompts.json /path/to/claude-mem.db
 ```
 
-Requires `sqlite3`. Each exported record includes: id, session_id, prompt_number, prompt_text, created_at, and created_at_epoch.
+Requires `sqlite3`.
 
 ## Installation
 
