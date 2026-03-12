@@ -23,6 +23,23 @@ Context window colors shift from green → yellow → orange → red as usage in
 
 The update checker queries the npm registry on session start (with a 4-hour cooldown) and compares against your running version. When a new version is found, the `⬆ v{version}` indicator appears in the status bar and a full notification with GitHub release notes is displayed at session start.
 
+### Export Claude-Mem Prompts
+
+A standalone script to export all user prompts from a [claude-mem](https://github.com/thedotmack/claude-mem) SQLite database to JSON.
+
+```bash
+# Default: exports to ./claude-mem-prompts.json from ~/.claude-mem/claude-mem.db
+./export-claude-mem-prompts.sh
+
+# Custom output file
+./export-claude-mem-prompts.sh my-prompts.json
+
+# Custom output file and db path
+./export-claude-mem-prompts.sh my-prompts.json /path/to/claude-mem.db
+```
+
+Requires `sqlite3`. Each exported record includes: id, session_id, prompt_number, prompt_text, created_at, and created_at_epoch.
+
 ## Installation
 
 Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
