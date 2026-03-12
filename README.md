@@ -25,13 +25,16 @@ The update checker queries the npm registry on session start (with a 4-hour cool
 
 ### Export Claude-Mem Memories
 
-A standalone script to export all memories from [claude-mem](https://github.com/thedotmack/claude-mem) to JSON. Supports two modes:
+A standalone script to export memories from [claude-mem](https://github.com/thedotmack/claude-mem) to JSON. By default exports all data (observations, sessions, and prompts). Use `--prompts-only` to export just user prompts.
 
 **HTTP API mode** (default) — queries a running claude-mem server:
 
 ```bash
-# Default: exports to ./all-memories.json from localhost:37777
+# Full export: observations, sessions, and prompts
 ./export-claude-mem-prompts.sh
+
+# User prompts only
+./export-claude-mem-prompts.sh --prompts-only
 
 # Custom output file and port
 ./export-claude-mem-prompts.sh my-memories.json 38888
@@ -39,17 +42,20 @@ A standalone script to export all memories from [claude-mem](https://github.com/
 
 Requires `curl` and a running claude-mem server.
 
-**SQLite mode** — reads the database directly:
+**SQLite mode** (`--db`) — reads the database directly:
 
 ```bash
-# Default: exports to ./claude-mem-prompts.json from ~/.claude-mem/claude-mem.db
+# Full export
 ./export-claude-mem-prompts.sh --db
+
+# User prompts only
+./export-claude-mem-prompts.sh --db --prompts-only
 
 # Custom output file and db path
 ./export-claude-mem-prompts.sh --db my-prompts.json /path/to/claude-mem.db
 ```
 
-Requires `sqlite3`.
+Requires `sqlite3`. Flags (`--db`, `--prompts-only`) can be combined in any order.
 
 ## Installation
 
