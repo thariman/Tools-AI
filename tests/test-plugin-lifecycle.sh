@@ -23,14 +23,14 @@ set -uo pipefail  # No set -e: tests must handle failures explicitly
 CLAUDE_CLI="/home/tony/.local/bin/claude"
 SETTINGS_FILE="$HOME/.claude/settings.json"
 SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
-PLUGIN_CACHE="$HOME/.claude/plugins/cache/skills-ai"
-MARKETPLACE_REPO="thariman/Skills-AI"
-MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/skills-ai"
+PLUGIN_CACHE="$HOME/.claude/plugins/cache/tools-ai"
+MARKETPLACE_REPO="thariman/Tools-AI"
+MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/tools-ai"
 KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
-PLUGIN_NAME="statusline@skills-ai"
+PLUGIN_NAME="statusline@tools-ai"
 # Plugin cache structure: $PLUGIN_CACHE/statusline/<version>/
 # Use a glob to find the version directory dynamically
-PLUGIN_VERSION="1.0.0"
+PLUGIN_VERSION="1.1.0"
 TUI_DRIVER=""  # Path to pexpect-based TUI driver (created at runtime)
 
 # ── Counters ───────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ import json, sys
 with open(sys.argv[1]) as f:
     s = json.load(f)
 plugins = s.get('enabledPlugins', [])
-s['enabledPlugins'] = [p for p in plugins if 'skills-ai' not in str(p).lower() and 'statusline' not in str(p).lower()]
+s['enabledPlugins'] = [p for p in plugins if 'tools-ai' not in str(p).lower() and 'statusline' not in str(p).lower()]
 if not s['enabledPlugins']:
     s.pop('enabledPlugins', None)
 with open(sys.argv[1], 'w') as f:
@@ -261,7 +261,7 @@ with open(f) as fh:
     data = json.load(fh)
 if isinstance(data, dict):
     for k in list(data.keys()):
-        if 'skills-ai' in k.lower() or 'Skills-AI' in str(data[k]):
+        if 'tools-ai' in k.lower() or 'Tools-AI' in str(data[k]):
             del data[k]
 tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
 try:
@@ -275,7 +275,7 @@ except:
 " "$KNOWN_MARKETPLACES" 2>/dev/null || true
   fi
 
-  # Remove marketplace directory for skills-ai
+  # Remove marketplace directory for tools-ai
   rm -rf "$MARKETPLACE_DIR"
 
   # Ensure settings.json exists as valid JSON
@@ -339,7 +339,7 @@ import json, sys
 with open(sys.argv[1]) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
-ep['statusline@skills-ai'] = True
+ep['statusline@tools-ai'] = True
 s['enabledPlugins'] = ep
 with open(sys.argv[1], 'w') as f:
     json.dump(s, f, indent=2)
@@ -693,7 +693,7 @@ reset_clean_state_real() {
   $CLAUDE_CLI plugin uninstall "$PLUGIN_NAME" 2>/dev/null || true
 
   # Remove marketplace
-  $CLAUDE_CLI plugin marketplace remove skills-ai 2>/dev/null || true
+  $CLAUDE_CLI plugin marketplace remove tools-ai 2>/dev/null || true
 
   # Reset settings.json to empty (remove all test artifacts)
   mkdir -p "$(dirname "$SETTINGS_FILE")"
@@ -1004,13 +1004,13 @@ with open(settings_file) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
 if isinstance(ep, dict):
-    ep.pop('statusline@skills-ai', None)
+    ep.pop('statusline@tools-ai', None)
     if not ep:
         s.pop('enabledPlugins', None)
     else:
         s['enabledPlugins'] = ep
 elif isinstance(ep, list):
-    ep = [p for p in ep if 'skills-ai' not in str(p).lower()]
+    ep = [p for p in ep if 'tools-ai' not in str(p).lower()]
     if not ep:
         s.pop('enabledPlugins', None)
     else:
@@ -1035,9 +1035,9 @@ with open(sys.argv[1]) as f:
     s = json.load(f)
 plugins = s.get('enabledPlugins', {})
 if isinstance(plugins, dict):
-    found = any('skills-ai' in k.lower() or 'statusline' in k.lower() for k in plugins)
+    found = any('tools-ai' in k.lower() or 'statusline' in k.lower() for k in plugins)
 else:
-    found = any('skills-ai' in str(p).lower() or 'statusline' in str(p).lower() for p in plugins)
+    found = any('tools-ai' in str(p).lower() or 'statusline' in str(p).lower() for p in plugins)
 print('yes' if found else 'no')
 " "$SETTINGS_FILE" 2>/dev/null) || true
 
@@ -1104,9 +1104,9 @@ with open(sys.argv[1]) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
 if isinstance(ep, dict):
-    ep.pop('statusline@skills-ai', None)
+    ep.pop('statusline@tools-ai', None)
 elif isinstance(ep, list):
-    ep = [p for p in ep if 'skills-ai' not in str(p).lower()]
+    ep = [p for p in ep if 'tools-ai' not in str(p).lower()]
 if not ep:
     s.pop('enabledPlugins', None)
 else:
@@ -1228,7 +1228,7 @@ with open(sys.argv[1]) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
 if isinstance(ep, dict):
-    ep.pop('statusline@skills-ai', None)
+    ep.pop('statusline@tools-ai', None)
 if not ep:
     s.pop('enabledPlugins', None)
 else:
@@ -1485,7 +1485,7 @@ test_T11_full_cleanup() {
   assert_dir_exists "$PLUGIN_CACHE" "Plugin cache exists before cleanup"
 
   # Simulate adding marketplace entry to known_marketplaces.json
-  info "Adding skills-ai marketplace entry..."
+  info "Adding tools-ai marketplace entry..."
   /usr/bin/python3 -c "
 import json, sys, tempfile, os
 f = sys.argv[1]
@@ -1495,8 +1495,8 @@ if os.path.exists(f):
 else:
     os.makedirs(os.path.dirname(f), exist_ok=True)
     data = {}
-data['skills-ai'] = {
-    'source': {'source': 'github', 'repo': 'thariman/Skills-AI'},
+data['tools-ai'] = {
+    'source': {'source': 'github', 'repo': 'thariman/Tools-AI'},
     'installLocation': sys.argv[2],
     'lastUpdated': '2026-01-01T00:00:00.000Z'
 }
@@ -1536,7 +1536,7 @@ with open(settings_file) as f:
     s = json.load(f)
 ep = s.get('enabledPlugins', {})
 if isinstance(ep, dict):
-    ep.pop('statusline@skills-ai', None)
+    ep.pop('statusline@tools-ai', None)
     if not ep:
         s.pop('enabledPlugins', None)
     else:
@@ -1591,7 +1591,7 @@ f = sys.argv[1]
 with open(f) as fh:
     data = json.load(fh)
 for k in list(data.keys()):
-    if 'skills-ai' in k.lower():
+    if 'tools-ai' in k.lower():
         del data[k]
 tmpfd, tmppath = tempfile.mkstemp(dir=os.path.dirname(f), suffix='.tmp')
 try:
@@ -1614,9 +1614,9 @@ except:
   assert_file_not_contains "$SETTINGS_FILE" '"statusLine"' \
     "settings.json has no statusLine key"
 
-  # 4b: enabledPlugins gone or no skills-ai entries
-  assert_file_not_contains "$SETTINGS_FILE" 'skills-ai' \
-    "settings.json has no skills-ai references"
+  # 4b: enabledPlugins gone or no tools-ai entries
+  assert_file_not_contains "$SETTINGS_FILE" 'tools-ai' \
+    "settings.json has no tools-ai references"
 
   # 4c: Plugin cache directory gone
   assert_dir_not_exists "$PLUGIN_CACHE" "Plugin cache directory fully removed"
@@ -1624,10 +1624,10 @@ except:
   # 4d: Marketplace directory gone
   assert_dir_not_exists "$MARKETPLACE_DIR" "Marketplace directory fully removed"
 
-  # 4e: known_marketplaces.json has no skills-ai entry
+  # 4e: known_marketplaces.json has no tools-ai entry
   if [ -f "$KNOWN_MARKETPLACES" ]; then
-    assert_file_not_contains "$KNOWN_MARKETPLACES" 'skills-ai' \
-      "known_marketplaces.json has no skills-ai entry"
+    assert_file_not_contains "$KNOWN_MARKETPLACES" 'tools-ai' \
+      "known_marketplaces.json has no tools-ai entry"
   else
     pass "known_marketplaces.json absent (acceptable)"
   fi

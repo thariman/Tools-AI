@@ -23,6 +23,32 @@ Context window colors shift from green → yellow → orange → red as usage in
 
 The update checker queries the npm registry on session start (with a 4-hour cooldown) and compares against your running version. When a new version is found, the `⬆ v{version}` indicator appears in the status bar and a full notification with GitHub release notes is displayed at session start.
 
+### Rename
+
+Automatically names Claude Code sessions on startup using the current directory name plus an incrementing counter:
+
+```
+Tools-AI-1    Tools-AI-2    my-project-1    my-project-2
+```
+
+- Names sessions instantly on `SessionStart` — no manual `/rename` needed
+- Counter is per-directory, stored in `~/.claude/rename/state.json`
+- Writes directly to the session JSONL file for immediate effect
+- Falls back gracefully if `python3` is unavailable
+
+**Install:**
+
+```
+/plugin install rename@tools-ai
+```
+
+**Uninstall:**
+
+```bash
+bash ~/.claude/plugins/cache/tools-ai/rename/*/scripts/uninstall.sh
+/plugin uninstall rename@tools-ai
+```
+
 ### Export Claude-Mem Memories
 
 A standalone script to export memories from [claude-mem](https://github.com/thedotmack/claude-mem) to JSON. By default exports all data (observations, sessions, and prompts). Use `--prompts-only` to export just user prompts.
@@ -67,36 +93,42 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) v1.0.33+.
 /plugin marketplace add thariman/Tools-AI
 ```
 
-**2. Install the plugin:**
+**2. Install plugins:**
 
 ```
-/plugin install statusline@skills-ai
+/plugin install statusline@tools-ai
+/plugin install rename@tools-ai
 ```
 
-**3. Start using Claude Code** — the statusline is automatically configured on the first session start via a `SessionStart` hook and appears after your first interaction (no restart needed).
+**3. Start using Claude Code** — both plugins are automatically configured on the first session start via `SessionStart` hooks. The statusline appears after your first interaction and sessions are auto-named immediately (no restart needed).
 
 > **How it works:** On the first session after install, a `SessionStart` hook runs `setup.sh` which copies the statusline files to a persistent location (`~/.claude/statusline/`) and writes the `statusLine` config to `~/.claude/settings.json`. This ensures the status line survives plugin cache clears and Claude Code updates. Claude Code auto-reloads settings after each interaction, so the status bar appears as soon as you send your first message. A `UserPromptSubmit` hook also runs `setup.sh` as a safety net, ensuring the config is written before any interaction triggers the reload.
 
 ## Uninstalling
 
-**1. Remove the statusLine config and persistent files:**
+**1. Run the uninstall script for the plugin(s) you want to remove:**
 
 ```bash
-bash ~/.claude/plugins/cache/skills-ai/statusline/*/scripts/uninstall.sh
+# Statusline
+bash ~/.claude/plugins/cache/tools-ai/statusline/*/scripts/uninstall.sh
+
+# Rename
+bash ~/.claude/plugins/cache/tools-ai/rename/*/scripts/uninstall.sh
 ```
 
-**2. Uninstall the plugin:**
+**2. Uninstall the plugin(s):**
 
 ```
-/plugin uninstall statusline@skills-ai
+/plugin uninstall statusline@tools-ai
+/plugin uninstall rename@tools-ai
 ```
 
-> **Important:** Run `uninstall.sh` first. The plugin system doesn't have a lifecycle hook for uninstall, so if you skip step 1, the `statusLine` config will remain orphaned in `settings.json` (it won't cause errors, but you'll need to manually remove the `statusLine` key and `~/.claude/statusline/` directory).
+> **Important:** Run `uninstall.sh` first. The plugin system doesn't have a lifecycle hook for uninstall, so if you skip step 1, persistent files and config will remain orphaned (they won't cause errors, but you'll need to manually clean up `~/.claude/statusline/` or `~/.claude/rename/`).
 
 To remove the marketplace source entirely:
 
 ```
-/plugin marketplace remove skills-ai
+/plugin marketplace remove tools-ai
 ```
 
 ## How It Works
@@ -157,21 +189,18 @@ No global `node` in PATH is required — the plugin discovers it automatically.
 
 ## Plugin Structure
 
-Each plugin in this marketplace follows the standard Claude Code plugin layout:
+Each plugin follows the standard Claude Code plugin layout:
 
 ```
 plugins/<name>/
 ├── .claude-plugin/
 │   └── plugin.json        # Plugin metadata (name, version, description)
 ├── hooks/
-│   └── hooks.json         # Hook event registrations (SessionStart)
+│   └── hooks.json         # Hook event registrations (SessionStart, etc.)
 ├── scripts/
 │   ├── setup.sh           # Auto-configuration + persistent file copy
-│   ├── run.sh             # Runtime wrapper (node discovery)
-│   ├── check-update.sh    # Update checker wrapper (node discovery)
 │   └── uninstall.sh       # Pre-uninstall cleanup (removes persistent files)
-├── statusline.js          # Status bar renderer (Node.js)
-└── check-update.js        # Version checker + release notes fetcher (Node.js)
+└── <plugin files>         # Plugin-specific scripts and logic
 ```
 
 ## License

@@ -1,0 +1,10 @@
+{
+  "name": "rename",
+  "version": "1.1.0",
+  "description": "Auto-rename sessions on startup using directory name + counter (e.g. Tools-AI-3)",
+  "author": {
+    "name": "thariman"
+  },
+  "license": "MIT",
+  "keywords": ["rename", "session", "productivity"]
+}

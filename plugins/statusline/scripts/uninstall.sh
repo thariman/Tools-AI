@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Removes the statusLine config from settings.json and cleans up persistent files
-# Run this BEFORE "/plugin uninstall statusline@skills-ai"
+# Run this BEFORE "/plugin uninstall statusline@tools-ai"
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
 PERSISTENT_DIR="$HOME/.claude/statusline"

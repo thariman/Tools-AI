@@ -1,18 +1,24 @@
 {
-  "name": "skills-ai",
+  "name": "tools-ai",
   "owner": {
     "name": "thariman"
   },
   "metadata": {
     "description": "Custom Claude Code plugins",
-    "homepage": "https://github.com/thariman/Skills-AI"
+    "homepage": "https://github.com/thariman/Tools-AI"
   },
   "plugins": [
     {
       "name": "statusline",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "source": "./plugins/statusline",
       "description": "Status line showing model, git branch/status, active task, directory, and context window usage"
+    },
+    {
+      "name": "rename",
+      "version": "1.1.0",
+      "source": "./plugins/rename",
+      "description": "Auto-rename sessions on startup using directory name + counter (e.g. Tools-AI-3)"
     }
   ]
 }

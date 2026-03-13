@@ -1,0 +1,26 @@
+{
+  "description": "Auto-rename sessions on startup using directory name + incrementing counter",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/rename.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
